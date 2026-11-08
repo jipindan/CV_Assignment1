@@ -53,3 +53,45 @@ Table4       15   10    7    5      0.588    0.667  0.625       6.5      13.8
 Table5       14    6    6    8      0.500    0.429  0.462      10.6      19.6
 Table6       13    6    6    7      0.500    0.462  0.480       8.7      20.7
 All          90   39   43   51      0.476    0.433  0.453       7.0      20.7
+
+Method 3: Hough circles
+Table1    16 circles,  15 on the table
+Table2    17 circles,  16 on the table
+Table3    16 circles,  16 on the table
+Table4    15 circles,  15 on the table
+Table5    15 circles,  14 on the table
+Table6    13 circles,  12 on the table
+
+Hough circles results:
+Image     Balls   TP   FP   FN  Precision   Recall     F1   MeanErr    MaxErr
+Table1       16   14    1    2      0.933    0.875  0.903       6.7      17.1
+Table2       16   16    0    0      1.000    1.000  1.000       3.8      13.0
+Table3       16   15    1    1      0.938    0.938  0.938       3.3       6.2
+Table4       15   14    1    1      0.933    0.933  0.933       4.0      10.7
+Table5       14   12    2    2      0.857    0.857  0.857       6.5      11.9
+Table6       13   12    0    1      1.000    0.923  0.960       6.1      11.7
+All          90   83    5    7      0.943    0.922  0.933       5.0      17.1
+
+Method 4: k-means clustering of colours
+Table1    BGR ( 82,117, 79)  393666 pixels  BGR (128,170,235)   21706 pixels  BGR ( 98,134, 89)  430580 pixels  BGR ( 48, 78, 60)  133470 pixels
+Table1    80 regions,   4 large enough
+Table2    BGR (190,223,235)   15014 pixels  BGR ( 59,121,232)   11909 pixels  BGR ( 91,127, 85)  752703 pixels  BGR ( 56, 86, 63)  199796 pixels
+Table2    33 regions,   6 large enough
+Table3    BGR ( 89,123, 82)  753218 pixels  BGR ( 52, 81, 59)  200261 pixels  BGR ( 68,129,228)   12196 pixels  BGR (185,217,229)   13747 pixels
+Table3    38 regions,  10 large enough
+Table4    BGR ( 89,122, 79)  774822 pixels  BGR ( 50, 78, 56)  179173 pixels  BGR ( 64,127,231)   11315 pixels  BGR (184,217,228)   14112 pixels
+Table4    23 regions,   9 large enough
+Table5    BGR ( 92,126, 84)  598383 pixels  BGR (127,175,228)   21258 pixels  BGR ( 40, 68, 53)  109852 pixels  BGR ( 72,105, 70)  249929 pixels
+Table5    68 regions,   1 large enough
+Table6    BGR ( 92,127, 85)  581248 pixels  BGR (125,176,229)   19774 pixels  BGR ( 41, 69, 54)  116775 pixels  BGR ( 72,105, 71)  261625 pixels
+Table6    59 regions,   3 large enough
+
+k-means results:
+Image     Balls   TP   FP   FN  Precision   Recall     F1   MeanErr    MaxErr
+Table1       16    0    4   16      0.000    0.000  0.000       0.0       0.0
+Table2       16    3    3   13      0.500    0.188  0.273       4.5       7.4
+Table3       16    5    5   11      0.500    0.312  0.385       5.7      17.5
+Table4       15    6    3    9      0.667    0.400  0.500       7.4      16.7
+Table5       14    0    1   14      0.000    0.000  0.000       0.0       0.0
+Table6       13    1    2   12      0.333    0.077  0.125      19.8      19.8
+All          90   15   18   75      0.455    0.167  0.244       7.1      19.8

@@ -34,6 +34,15 @@ const int SATURATION_BINS = 16;
 
 const int DIFFERENCE_THRESHOLD = 30;
 
+const int HOUGH_SMOOTHING_SIZE = 5;
+const double HOUGH_MIN_CENTRE_DISTANCE = 30;
+const double HOUGH_CANNY_THRESHOLD = 100;
+const double HOUGH_ACCUMULATOR_THRESHOLD = 20;
+const int HOUGH_MIN_RADIUS = 17;
+const int HOUGH_MAX_RADIUS = 31;
+
+const int KMEANS_CLUSTERS = 4;
+
 void Save(const string& folder, const string& name, const Mat& image){
 	string directory = string(RESULTS_LOCATION) + folder;
 	utils::fs::createDirectories(directory);
@@ -133,6 +142,64 @@ Mat BackgroundMask(const Mat& table_image, const Mat& background, const string& 
 	threshold(difference, binary, DIFFERENCE_THRESHOLD, 255, THRESH_BINARY);
 	Save("2_background", name + " binary", binary);
 	return CloseAndOpen(binary, 3, "2_background", name);
+}
+
+vector<Point2f> LocateByHough(const Mat& image, const Mat& homography, const string& name){
+	Mat grey;
+	cvtColor(image, grey, COLOR_BGR2GRAY);
+	GaussianBlur(grey, grey, Size(HOUGH_SMOOTHING_SIZE, HOUGH_SMOOTHING_SIZE), 0);
+	Mat edges;
+	Canny(grey, edges, HOUGH_CANNY_THRESHOLD / 2, HOUGH_CANNY_THRESHOLD);
+	Save("3_hough", name + " edges", edges);
+
+	vector<Vec3f> circles;
+	HoughCircles(grey, circles, HOUGH_GRADIENT, 1, HOUGH_MIN_CENTRE_DISTANCE, HOUGH_CANNY_THRESHOLD,
+		HOUGH_ACCUMULATOR_THRESHOLD, HOUGH_MIN_RADIUS, HOUGH_MAX_RADIUS);
+	Mat display = image.clone();
+	vector<Point2f> centres, table_points, detections;
+	for (size_t i = 0; i < circles.size(); i++) {
+		circle(display, Point2f(circles[i][0], circles[i][1]), (int)circles[i][2], Scalar(0, 0, 255), 2);
+		centres.push_back(Point2f(circles[i][0], circles[i][1]));
+	}
+	Save("3_hough", name + " circles", display);
+	if (!centres.empty()) perspectiveTransform(centres, table_points, homography);
+	for (size_t i = 0; i < table_points.size(); i++)
+		if (table_points[i].x >= 0 && table_points[i].x < TABLE_COLS && table_points[i].y >= 0 && table_points[i].y < TABLE_ROWS)
+			detections.push_back(table_points[i]);
+	printf("%-8s %3d circles, %3d on the table\n", name.c_str(), (int)circles.size(), (int)detections.size());
+	return detections;
+}
+
+Mat KMeansMask(const Mat& table_image, const string& name){
+	Mat samples = table_image.reshape(1, table_image.rows * table_image.cols);
+	samples.convertTo(samples, CV_32F);
+	Mat labels, centres;
+	kmeans(samples, KMEANS_CLUSTERS, labels, TermCriteria(TermCriteria::MAX_ITER | TermCriteria::EPS, 10, 1.0),
+		3, KMEANS_PP_CENTERS, centres);
+	labels = labels.reshape(1, table_image.rows);
+
+	Mat clustered(table_image.size(), CV_8UC3);
+	for (int row = 0; row < table_image.rows; row++)
+		for (int col = 0; col < table_image.cols; col++) {
+			int cluster = labels.at<int>(row, col);
+			clustered.at<Vec3b>(row, col) = Vec3b((uchar)centres.at<float>(cluster, 0), (uchar)centres.at<float>(cluster, 1), (uchar)centres.at<float>(cluster, 2));
+		}
+	Save("4_kmeans", name + " clusters", clustered);
+
+	int cloth = 0, cloth_size = 0;
+	printf("%-8s", name.c_str());
+	for (int cluster = 0; cluster < KMEANS_CLUSTERS; cluster++) {
+		int size = countNonZero(labels == cluster);
+		printf("  BGR (%3.0f,%3.0f,%3.0f) %7d pixels", centres.at<float>(cluster, 0), centres.at<float>(cluster, 1), centres.at<float>(cluster, 2), size);
+		if (size > cloth_size) {
+			cloth = cluster;
+			cloth_size = size;
+		}
+	}
+	printf("\n");
+	Mat binary = (labels != cloth);
+	Save("4_kmeans", name + " binary", binary);
+	return CloseAndOpen(binary, 5, "4_kmeans", name);
 }
 
 struct LocationResult {
@@ -253,4 +320,14 @@ void MyApplication(){
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 		detections[i] = RegionCentres(BackgroundMask(table_images[i], table_images[0], IMAGE_NAMES[i]), IMAGE_NAMES[i]);
 	EvaluateMethod("Background subtraction", "2_background", table_images, detections);
+
+	cout << endl << "Method 3: Hough circles" << endl;
+	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
+		detections[i] = LocateByHough(images[i], homography, IMAGE_NAMES[i]);
+	EvaluateMethod("Hough circles", "3_hough", table_images, detections);
+
+	cout << endl << "Method 4: k-means clustering of colours" << endl;
+	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
+		detections[i] = RegionCentres(KMeansMask(table_images[i], IMAGE_NAMES[i]), IMAGE_NAMES[i]);
+	EvaluateMethod("k-means", "4_kmeans", table_images, detections);
 }
