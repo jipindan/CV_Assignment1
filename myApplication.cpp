@@ -43,6 +43,12 @@ const int HOUGH_MAX_RADIUS = 31;
 
 const int KMEANS_CLUSTERS = 4;
 
+const int WATERSHED_SMOOTHING_SIZE = 7;
+const double WATERSHED_CANNY_LOW = 100;
+const double WATERSHED_CANNY_HIGH = 200;
+const double WATERSHED_MARKER_DISTANCE = 2.0;
+const int WATERSHED_MAX_AREA = 3000;
+
 void Save(const string& folder, const string& name, const Mat& image){
 	string directory = string(RESULTS_LOCATION) + folder;
 	utils::fs::createDirectories(directory);
@@ -144,6 +150,15 @@ Mat BackgroundMask(const Mat& table_image, const Mat& background, const string& 
 	return CloseAndOpen(binary, 3, "2_background", name);
 }
 
+vector<Point2f> PointsOnTable(const vector<Point2f>& image_points, const Mat& homography){
+	vector<Point2f> table_points, on_table;
+	if (!image_points.empty()) perspectiveTransform(image_points, table_points, homography);
+	for (size_t i = 0; i < table_points.size(); i++)
+		if (table_points[i].x >= 0 && table_points[i].x < TABLE_COLS && table_points[i].y >= 0 && table_points[i].y < TABLE_ROWS)
+			on_table.push_back(table_points[i]);
+	return on_table;
+}
+
 vector<Point2f> LocateByHough(const Mat& image, const Mat& homography, const string& name){
 	Mat grey;
 	cvtColor(image, grey, COLOR_BGR2GRAY);
@@ -156,16 +171,13 @@ vector<Point2f> LocateByHough(const Mat& image, const Mat& homography, const str
 	HoughCircles(grey, circles, HOUGH_GRADIENT, 1, HOUGH_MIN_CENTRE_DISTANCE, HOUGH_CANNY_THRESHOLD,
 		HOUGH_ACCUMULATOR_THRESHOLD, HOUGH_MIN_RADIUS, HOUGH_MAX_RADIUS);
 	Mat display = image.clone();
-	vector<Point2f> centres, table_points, detections;
+	vector<Point2f> centres;
 	for (size_t i = 0; i < circles.size(); i++) {
 		circle(display, Point2f(circles[i][0], circles[i][1]), (int)circles[i][2], Scalar(0, 0, 255), 2);
 		centres.push_back(Point2f(circles[i][0], circles[i][1]));
 	}
 	Save("3_hough", name + " circles", display);
-	if (!centres.empty()) perspectiveTransform(centres, table_points, homography);
-	for (size_t i = 0; i < table_points.size(); i++)
-		if (table_points[i].x >= 0 && table_points[i].x < TABLE_COLS && table_points[i].y >= 0 && table_points[i].y < TABLE_ROWS)
-			detections.push_back(table_points[i]);
+	vector<Point2f> detections = PointsOnTable(centres, homography);
 	printf("%-8s %3d circles, %3d on the table\n", name.c_str(), (int)circles.size(), (int)detections.size());
 	return detections;
 }
@@ -200,6 +212,59 @@ Mat KMeansMask(const Mat& table_image, const string& name){
 	Mat binary = (labels != cloth);
 	Save("4_kmeans", name + " binary", binary);
 	return CloseAndOpen(binary, 5, "4_kmeans", name);
+}
+
+vector<Point2f> LocateByWatershed(const Mat& image, const Mat& homography, const string& name){
+	Mat grey;
+	cvtColor(image, grey, COLOR_BGR2GRAY);
+	blur(grey, grey, Size(WATERSHED_SMOOTHING_SIZE, WATERSHED_SMOOTHING_SIZE));
+	Mat edges;
+	Canny(grey, edges, WATERSHED_CANNY_LOW, WATERSHED_CANNY_HIGH);
+	Save("5_watershed", name + " edges", edges);
+
+	Mat not_edges, chamfer;
+	threshold(edges, not_edges, 127, 255, THRESH_BINARY_INV);
+	distanceTransform(not_edges, chamfer, DIST_L2, 3);
+	Mat chamfer_display;
+	normalize(chamfer, chamfer_display, 0, 255, NORM_MINMAX, CV_8U);
+	Save("5_watershed", name + " chamfer distance", chamfer_display);
+
+	Mat dilated, maxima;
+	dilate(chamfer, dilated, Mat());
+	compare(chamfer, dilated, maxima, CMP_EQ);
+	maxima &= (chamfer > WATERSHED_MARKER_DISTANCE);
+	vector<vector<Point>> contours;
+	vector<Vec4i> hierarchy;
+	findContours(maxima, contours, hierarchy, RETR_CCOMP, CHAIN_APPROX_NONE);
+	Mat markers(image.size(), CV_32S, Scalar(0));
+	int regions = 0;
+	for (size_t i = 0; i < contours.size(); i++)
+		if (hierarchy[i][3] < 0)
+			drawContours(markers, contours, (int)i, Scalar(++regions), FILLED);
+
+	Mat inverse_chamfer = 255 - chamfer_display;
+	cvtColor(inverse_chamfer, inverse_chamfer, COLOR_GRAY2BGR);
+	watershed(inverse_chamfer, markers);
+	Mat display = image.clone();
+	display.setTo(Scalar(0, 0, 255), markers == -1);
+	Save("5_watershed", name + " regions", display);
+
+	vector<double> area(regions + 1, 0.0), sum_x(regions + 1, 0.0), sum_y(regions + 1, 0.0);
+	for (int row = 0; row < markers.rows; row++)
+		for (int col = 0; col < markers.cols; col++) {
+			int region = markers.at<int>(row, col);
+			if (region <= 0) continue;
+			area[region]++;
+			sum_x[region] += col;
+			sum_y[region] += row;
+		}
+	vector<Point2f> centres;
+	for (int region = 1; region <= regions; region++)
+		if (area[region] >= MINIMUM_BALL_AREA && area[region] <= WATERSHED_MAX_AREA)
+			centres.push_back(Point2f((float)(sum_x[region] / area[region]), (float)(sum_y[region] / area[region])));
+	vector<Point2f> detections = PointsOnTable(centres, homography);
+	printf("%-8s %5d markers, %3d ball sized, %3d on the table\n", name.c_str(), regions, (int)centres.size(), (int)detections.size());
+	return detections;
 }
 
 struct LocationResult {
@@ -330,4 +395,9 @@ void MyApplication(){
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 		detections[i] = RegionCentres(KMeansMask(table_images[i], IMAGE_NAMES[i]), IMAGE_NAMES[i]);
 	EvaluateMethod("k-means", "4_kmeans", table_images, detections);
+
+	cout << endl << "Method 5: watershed" << endl;
+	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
+		detections[i] = LocateByWatershed(images[i], homography, IMAGE_NAMES[i]);
+	EvaluateMethod("Watershed", "5_watershed", table_images, detections);
 }

@@ -95,3 +95,21 @@ Table4       15    6    3    9      0.667    0.400  0.500       7.4      16.7
 Table5       14    0    1   14      0.000    0.000  0.000       0.0       0.0
 Table6       13    1    2   12      0.333    0.077  0.125      19.8      19.8
 All          90   15   18   75      0.455    0.167  0.244       7.1      19.8
+
+Method 5: watershed
+Table1     743 markers,  81 ball sized,  51 on the table
+Table2     959 markers, 138 ball sized,  96 on the table
+Table3     941 markers, 113 ball sized,  75 on the table
+Table4     949 markers, 129 ball sized,  93 on the table
+Table5     823 markers, 122 ball sized,  85 on the table
+Table6     874 markers,  88 ball sized,  57 on the table
+
+Watershed results:
+Image     Balls   TP   FP   FN  Precision   Recall     F1   MeanErr    MaxErr
+Table1       16   12   39    4      0.235    0.750  0.358      12.0      21.0
+Table2       16   10   86    6      0.104    0.625  0.179       9.0      18.3
+Table3       16   11   64    5      0.147    0.688  0.242       9.6      17.6
+Table4       15   12   81    3      0.129    0.800  0.222       8.4      19.1
+Table5       14   12   73    2      0.141    0.857  0.242      12.1      21.1
+Table6       13    6   51    7      0.105    0.462  0.171      10.1      20.9
+All          90   63  394   27      0.138    0.700  0.230      10.3      21.1
