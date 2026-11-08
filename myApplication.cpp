@@ -305,7 +305,7 @@ void PrintLocationRow(const string& name, const LocationResult& r){
 	double recall = r.balls ? (double)r.true_positives / r.balls : 0.0;
 	double f1 = (precision + recall) > 0 ? 2 * precision * recall / (precision + recall) : 0.0;
 	double mean_error = r.true_positives ? r.total_error / r.true_positives : 0.0;
-	printf("%-8s %6d %4d %4d %4d %10.3f %8.3f %6.3f %9.1f %9.1f\n", name.c_str(), r.balls, r.true_positives,
+	printf("%-10s %6d %4d %4d %4d %10.3f %8.3f %6.3f %9.1f %9.1f\n", name.c_str(), r.balls, r.true_positives,
 		r.false_positives, r.false_negatives, precision, recall, f1, mean_error, r.max_error);
 }
 
@@ -325,9 +325,13 @@ Mat DrawLocations(const Mat& table_image, int image_index, const vector<Point2f>
 	return display;
 }
 
-void EvaluateMethod(const string& title, const string& folder, const Mat table_images[], const vector<Point2f> detections[]){
+void PrintLocationHeader(const string& first_column){
+	printf("%-10s %6s %4s %4s %4s %10s %8s %6s %9s %9s\n", first_column.c_str(), "Balls", "TP", "FP", "FN", "Precision", "Recall", "F1", "MeanErr", "MaxErr");
+}
+
+LocationResult EvaluateMethod(const string& title, const string& folder, const Mat table_images[], const vector<Point2f> detections[]){
 	cout << endl << title << " results:" << endl;
-	printf("%-8s %6s %4s %4s %4s %10s %8s %6s %9s %9s\n", "Image", "Balls", "TP", "FP", "FN", "Precision", "Recall", "F1", "MeanErr", "MaxErr");
+	PrintLocationHeader("Image");
 	LocationResult total;
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++) {
 		vector<bool> detection_correct, ball_found;
@@ -342,6 +346,7 @@ void EvaluateMethod(const string& title, const string& folder, const Mat table_i
 		total.max_error = max(total.max_error, result.max_error);
 	}
 	PrintLocationRow("All", total);
+	return total;
 }
 
 }
@@ -374,30 +379,37 @@ void MyApplication(){
 	}
 
 	vector<Point2f> detections[NUMBER_OF_IMAGES];
+	LocationResult totals[5];
 
 	cout << endl << "Method 1: back projection" << endl;
 	MatND histogram = TableHistogram(table_images[0]);
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 		detections[i] = RegionCentres(BackProjectionMask(table_images[i], histogram, IMAGE_NAMES[i]), IMAGE_NAMES[i]);
-	EvaluateMethod("Back projection", "1_backprojection", table_images, detections);
+	totals[0] = EvaluateMethod("Back projection", "1_backprojection", table_images, detections);
 
 	cout << endl << "Method 2: background subtraction" << endl;
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 		detections[i] = RegionCentres(BackgroundMask(table_images[i], table_images[0], IMAGE_NAMES[i]), IMAGE_NAMES[i]);
-	EvaluateMethod("Background subtraction", "2_background", table_images, detections);
+	totals[1] = EvaluateMethod("Background subtraction", "2_background", table_images, detections);
 
 	cout << endl << "Method 3: Hough circles" << endl;
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 		detections[i] = LocateByHough(images[i], homography, IMAGE_NAMES[i]);
-	EvaluateMethod("Hough circles", "3_hough", table_images, detections);
+	totals[2] = EvaluateMethod("Hough circles", "3_hough", table_images, detections);
 
 	cout << endl << "Method 4: k-means clustering of colours" << endl;
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 		detections[i] = RegionCentres(KMeansMask(table_images[i], IMAGE_NAMES[i]), IMAGE_NAMES[i]);
-	EvaluateMethod("k-means", "4_kmeans", table_images, detections);
+	totals[3] = EvaluateMethod("k-means", "4_kmeans", table_images, detections);
 
 	cout << endl << "Method 5: watershed" << endl;
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 		detections[i] = LocateByWatershed(images[i], homography, IMAGE_NAMES[i]);
-	EvaluateMethod("Watershed", "5_watershed", table_images, detections);
+	totals[4] = EvaluateMethod("Watershed", "5_watershed", table_images, detections);
+
+	const char* method_names[5] = { "Back proj", "Background", "Hough", "k-means", "Watershed" };
+	cout << endl << "Comparison of the location methods (Table1 to Table6):" << endl;
+	PrintLocationHeader("Method");
+	for (int method = 0; method < 5; method++)
+		PrintLocationRow(method_names[method], totals[method]);
 }
