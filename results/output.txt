@@ -11,13 +11,20 @@ Perspective transformation:
  0.02805259519075561, 2.470632133585815, -95.92584925478816;
  1.372576279739869e-05, 0.001208194988401226, 1]
 
+Method 1: back projection
 Cloth sample: 904030 pixels
-Table1   Otsu threshold 109.0,  16 regions,   3 large enough
-Table2   Otsu threshold 109.0,  23 regions,   6 large enough
-Table3   Otsu threshold 109.0,  14 regions,   7 large enough
-Table4   Otsu threshold 109.0,  14 regions,   6 large enough
-Table5   Otsu threshold 109.0,  12 regions,   6 large enough
-Table6   Otsu threshold 109.0,  12 regions,   5 large enough
+Table1   Otsu threshold 109.0
+Table1    16 regions,   3 large enough
+Table2   Otsu threshold 109.0
+Table2    23 regions,   6 large enough
+Table3   Otsu threshold 109.0
+Table3    14 regions,   7 large enough
+Table4   Otsu threshold 109.0
+Table4    14 regions,   6 large enough
+Table5   Otsu threshold 109.0
+Table5    12 regions,   6 large enough
+Table6   Otsu threshold 109.0
+Table6    12 regions,   5 large enough
 
 Back projection results:
 Image     Balls   TP   FP   FN  Precision   Recall     F1   MeanErr    MaxErr
@@ -29,4 +36,20 @@ Table5       14    2    4   12      0.333    0.143  0.200      13.4      13.7
 Table6       13    1    4   12      0.200    0.077  0.111       6.6       6.6
 All          90   12   21   78      0.364    0.133  0.195      12.9      19.4
 
-Press any key in an image window to finish.
+Method 2: background subtraction
+Table1    53 regions,   8 large enough
+Table2    70 regions,  16 large enough
+Table3    70 regions,  17 large enough
+Table4    88 regions,  17 large enough
+Table5    55 regions,  12 large enough
+Table6    44 regions,  12 large enough
+
+Background subtraction results:
+Image     Balls   TP   FP   FN  Precision   Recall     F1   MeanErr    MaxErr
+Table1       16    1    7   15      0.125    0.062  0.083      15.1      15.1
+Table2       16    7    9    9      0.438    0.438  0.438       4.5       8.5
+Table3       16    9    8    7      0.529    0.562  0.545       5.0      10.8
+Table4       15   10    7    5      0.588    0.667  0.625       6.5      13.8
+Table5       14    6    6    8      0.500    0.429  0.462      10.6      19.6
+Table6       13    6    6    7      0.500    0.462  0.480       8.7      20.7
+All          90   39   43   51      0.476    0.433  0.453       7.0      20.7

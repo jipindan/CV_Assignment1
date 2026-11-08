@@ -27,16 +27,18 @@ const int GROUND_TRUTH[NUMBER_OF_IMAGES][NUMBER_OF_BALLS][2] = {
 	{ {608,26}, {535,23}, {546,1407}, {444,1204}, {-1,-1}, {305,1406}, {131,25}, {260,1294}, {226,1252}, {538,72}, {171,1270}, {665,798}, {249,351}, {-1,-1}, {169,901}, {399,1201} },
 	{ {629,947}, {535,23}, {477,1364}, {444,1204}, {-1,-1}, {305,1406}, {131,25}, {260,1294}, {226,1252}, {538,72}, {171,1270}, {-1,-1}, {249,351}, {-1,-1}, {169,901}, {399,1201} } };
 
-const int HUE_BINS = 18;
-const int SATURATION_BINS = 16;
 const int MINIMUM_BALL_AREA = 400;
 
-void ShowAndSave(const string& folder, const string& name, const Mat& image, bool show){
+const int HUE_BINS = 18;
+const int SATURATION_BINS = 16;
+
+const int DIFFERENCE_THRESHOLD = 30;
+
+void Save(const string& folder, const string& name, const Mat& image){
 	string directory = string(RESULTS_LOCATION) + folder;
 	utils::fs::createDirectories(directory);
 	string extension = (image.channels() == 3) ? ".jpg" : ".png";
 	imwrite(directory + "/" + name + extension, image);
-	if (show) imshow(name, image);
 }
 
 bool BallOnTable(int image_index, int ball){
@@ -58,13 +60,39 @@ Mat DrawGroundTruth(const Mat& table_image, int image_index){
 	return display;
 }
 
+Mat CloseAndOpen(const Mat& binary, int element_size, const string& folder, const string& name){
+	Mat element(element_size, element_size, CV_8U, Scalar(1));
+	Mat cleaned;
+	morphologyEx(binary, cleaned, MORPH_CLOSE, element);
+	morphologyEx(cleaned, cleaned, MORPH_OPEN, element);
+	Save(folder, name + " closed and opened", cleaned);
+	return cleaned;
+}
+
+vector<Point2f> RegionCentres(const Mat& binary, const string& name){
+	vector<vector<Point>> contours;
+	vector<Vec4i> hierarchy;
+	findContours(binary, contours, hierarchy, RETR_CCOMP, CHAIN_APPROX_NONE);
+	vector<Point2f> centres;
+	int regions = 0;
+	for (size_t i = 0; i < contours.size(); i++) {
+		if (hierarchy[i][3] >= 0) continue;
+		regions++;
+		Moments m = moments(contours[i]);
+		if (m.m00 < MINIMUM_BALL_AREA) continue;
+		centres.push_back(Point2f((float)(m.m10 / m.m00), (float)(m.m01 / m.m00)));
+	}
+	printf("%-8s %3d regions, %3d large enough\n", name.c_str(), regions, (int)centres.size());
+	return centres;
+}
+
 MatND TableHistogram(const Mat& table_image){
 	Mat hls_image;
 	cvtColor(table_image, hls_image, COLOR_BGR2HLS);
 	Mat cloth_mask(table_image.size(), CV_8U, Scalar(255));
 	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++)
 		circle(cloth_mask, GroundTruthPosition(0, ball), (int)(2 * BALL_RADIUS), Scalar(0), FILLED);
-	ShowAndSave("1_backprojection", "AllBalls cloth sample", cloth_mask, false);
+	Save("1_backprojection", "AllBalls cloth sample", cloth_mask);
 	cout << "Cloth sample: " << countNonZero(cloth_mask) << " pixels" << endl;
 
 	int channels[] = { 0, 2 };
@@ -78,7 +106,7 @@ MatND TableHistogram(const Mat& table_image){
 	return histogram;
 }
 
-vector<Point2f> LocateByBackProjection(const Mat& table_image, const MatND& histogram, const string& name){
+Mat BackProjectionMask(const Mat& table_image, const MatND& histogram, const string& name){
 	Mat hls_image;
 	cvtColor(table_image, hls_image, COLOR_BGR2HLS);
 	int channels[] = { 0, 2 };
@@ -87,31 +115,24 @@ vector<Point2f> LocateByBackProjection(const Mat& table_image, const MatND& hist
 	const float* ranges[] = { hue_range, saturation_range };
 	Mat probabilities;
 	calcBackProject(&hls_image, 1, channels, histogram, probabilities, ranges);
-	ShowAndSave("1_backprojection", name + " probabilities", probabilities, false);
+	Save("1_backprojection", name + " probabilities", probabilities);
 
 	Mat binary;
 	double otsu = threshold(probabilities, binary, 0, 255, THRESH_BINARY_INV | THRESH_OTSU);
-	ShowAndSave("1_backprojection", name + " binary", binary, false);
+	Save("1_backprojection", name + " binary", binary);
+	printf("%-8s Otsu threshold %5.1f\n", name.c_str(), otsu);
+	return CloseAndOpen(binary, 5, "1_backprojection", name);
+}
 
-	Mat five_by_five_element(5, 5, CV_8U, Scalar(1));
-	morphologyEx(binary, binary, MORPH_CLOSE, five_by_five_element);
-	morphologyEx(binary, binary, MORPH_OPEN, five_by_five_element);
-	ShowAndSave("1_backprojection", name + " closed and opened", binary, false);
-
-	vector<vector<Point>> contours;
-	vector<Vec4i> hierarchy;
-	findContours(binary, contours, hierarchy, RETR_CCOMP, CHAIN_APPROX_NONE);
-	vector<Point2f> detections;
-	int regions = 0;
-	for (size_t i = 0; i < contours.size(); i++) {
-		if (hierarchy[i][3] >= 0) continue;
-		regions++;
-		Moments m = moments(contours[i]);
-		if (m.m00 < MINIMUM_BALL_AREA) continue;
-		detections.push_back(Point2f((float)(m.m10 / m.m00), (float)(m.m01 / m.m00)));
-	}
-	printf("%-8s Otsu threshold %5.1f, %3d regions, %3d large enough\n", name.c_str(), otsu, regions, (int)detections.size());
-	return detections;
+Mat BackgroundMask(const Mat& table_image, const Mat& background, const string& name){
+	Mat difference;
+	absdiff(table_image, background, difference);
+	cvtColor(difference, difference, COLOR_BGR2GRAY);
+	Save("2_background", name + " difference", difference);
+	Mat binary;
+	threshold(difference, binary, DIFFERENCE_THRESHOLD, 255, THRESH_BINARY);
+	Save("2_background", name + " binary", binary);
+	return CloseAndOpen(binary, 3, "2_background", name);
 }
 
 struct LocationResult {
@@ -172,6 +193,25 @@ Mat DrawLocations(const Mat& table_image, int image_index, const vector<Point2f>
 	return display;
 }
 
+void EvaluateMethod(const string& title, const string& folder, const Mat table_images[], const vector<Point2f> detections[]){
+	cout << endl << title << " results:" << endl;
+	printf("%-8s %6s %4s %4s %4s %10s %8s %6s %9s %9s\n", "Image", "Balls", "TP", "FP", "FN", "Precision", "Recall", "F1", "MeanErr", "MaxErr");
+	LocationResult total;
+	for (int i = 1; i < NUMBER_OF_IMAGES; i++) {
+		vector<bool> detection_correct, ball_found;
+		LocationResult result = EvaluateLocations(i, detections[i], detection_correct, ball_found);
+		PrintLocationRow(IMAGE_NAMES[i], result);
+		Save(folder, string(IMAGE_NAMES[i]) + " locations", DrawLocations(table_images[i], i, detections[i], detection_correct, ball_found));
+		total.balls += result.balls;
+		total.true_positives += result.true_positives;
+		total.false_positives += result.false_positives;
+		total.false_negatives += result.false_negatives;
+		total.total_error += result.total_error;
+		total.max_error = max(total.max_error, result.max_error);
+	}
+	PrintLocationRow("All", total);
+}
+
 }
 
 void MyApplication(){
@@ -189,43 +229,28 @@ void MyApplication(){
 	Mat corners_image = images[0].clone();
 	for (int corner = 0; corner < 4; corner++)
 		line(corners_image, TABLE_CORNERS[corner], TABLE_CORNERS[(corner + 1) % 4], Scalar(0, 0, 255), 2);
-	ShowAndSave("0_data", "AllBalls corners", corners_image, false);
+	Save("0_data", "AllBalls corners", corners_image);
 
 	Point2f table_corners[4] = { Point2f(0, 0), Point2f(TABLE_COLS - 1, 0), Point2f(TABLE_COLS - 1, TABLE_ROWS - 1), Point2f(0, TABLE_ROWS - 1) };
 	Mat homography = getPerspectiveTransform(TABLE_CORNERS, table_corners);
-	cout << endl << "Perspective transformation:" << endl << homography << endl << endl;
+	cout << endl << "Perspective transformation:" << endl << homography << endl;
 
 	Mat table_images[NUMBER_OF_IMAGES];
 	for (int i = 0; i < NUMBER_OF_IMAGES; i++) {
 		warpPerspective(images[i], table_images[i], homography, Size(TABLE_COLS, TABLE_ROWS));
-		ShowAndSave("0_data", string(IMAGE_NAMES[i]) + " ground truth", DrawGroundTruth(table_images[i], i), false);
+		Save("0_data", string(IMAGE_NAMES[i]) + " ground truth", DrawGroundTruth(table_images[i], i));
 	}
-
-	MatND histogram = TableHistogram(table_images[0]);
 
 	vector<Point2f> detections[NUMBER_OF_IMAGES];
+
+	cout << endl << "Method 1: back projection" << endl;
+	MatND histogram = TableHistogram(table_images[0]);
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
-		detections[i] = LocateByBackProjection(table_images[i], histogram, IMAGE_NAMES[i]);
+		detections[i] = RegionCentres(BackProjectionMask(table_images[i], histogram, IMAGE_NAMES[i]), IMAGE_NAMES[i]);
+	EvaluateMethod("Back projection", "1_backprojection", table_images, detections);
 
-	cout << endl << "Back projection results:" << endl;
-	printf("%-8s %6s %4s %4s %4s %10s %8s %6s %9s %9s\n", "Image", "Balls", "TP", "FP", "FN", "Precision", "Recall", "F1", "MeanErr", "MaxErr");
-	LocationResult total;
-	for (int i = 1; i < NUMBER_OF_IMAGES; i++) {
-		vector<bool> detection_correct, ball_found;
-		LocationResult result = EvaluateLocations(i, detections[i], detection_correct, ball_found);
-		PrintLocationRow(IMAGE_NAMES[i], result);
-		ShowAndSave("1_backprojection", string(IMAGE_NAMES[i]) + " locations",
-			DrawLocations(table_images[i], i, detections[i], detection_correct, ball_found), true);
-		total.balls += result.balls;
-		total.true_positives += result.true_positives;
-		total.false_positives += result.false_positives;
-		total.false_negatives += result.false_negatives;
-		total.total_error += result.total_error;
-		total.max_error = max(total.max_error, result.max_error);
-	}
-	PrintLocationRow("All", total);
-
-	cout << endl << "Press any key in an image window to finish." << endl;
-	waitKey(0);
-	destroyAllWindows();
+	cout << endl << "Method 2: background subtraction" << endl;
+	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
+		detections[i] = RegionCentres(BackgroundMask(table_images[i], table_images[0], IMAGE_NAMES[i]), IMAGE_NAMES[i]);
+	EvaluateMethod("Background subtraction", "2_background", table_images, detections);
 }
