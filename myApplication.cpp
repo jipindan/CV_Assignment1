@@ -516,11 +516,24 @@ void PrintConfusionMatrix(const int confusion[NUMBER_OF_BALLS][NUMBER_OF_BALLS])
 	}
 }
 
-void EvaluateRecognition(const string& title, const Mat table_images[], const vector<Point2f> detections[], const vector<int> labels[], bool show_confusion){
+struct RecognitionResult {
+	int balls = 0, located = 0, correct = 0;
+};
+
+void PrintRecognitionHeader(const string& first_column, const string& last_column){
+	printf("%-18s %6s %8s %8s %9s %9s  %s\n", first_column.c_str(), "Balls", "Located", "Correct", "Accuracy", "Overall", last_column.c_str());
+}
+
+void PrintRecognitionRow(const string& name, const RecognitionResult& r, const string& errors){
+	printf("%-18s %6d %8d %8d %9.3f %9.3f %s\n", name.c_str(), r.balls, r.located, r.correct,
+		(double)r.correct / r.located, (double)r.correct / r.balls, errors.c_str());
+}
+
+RecognitionResult EvaluateRecognition(const string& title, const Mat table_images[], const vector<Point2f> detections[], const vector<int> labels[], bool show_confusion){
 	cout << endl << title << " recognition:" << endl;
-	printf("%-10s %6s %8s %8s %9s %9s  %s\n", "Image", "Balls", "Located", "Correct", "Accuracy", "Overall", "Errors (actual->recognised)");
+	PrintRecognitionHeader("Image", "Errors (actual->recognised)");
 	int confusion[NUMBER_OF_BALLS][NUMBER_OF_BALLS] = {};
-	int total_balls = 0, total_located = 0, total_correct = 0;
+	RecognitionResult total;
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++) {
 		vector<int> ball_for_detection;
 		vector<bool> ball_found;
@@ -534,16 +547,19 @@ void EvaluateRecognition(const string& title, const Mat table_images[], const ve
 			if (labels[i][detection] == actual) correct++;
 			else errors += string(" ") + BALL_NAMES[actual] + "->" + BALL_NAMES[labels[i][detection]];
 		}
-		printf("%-10s %6d %8d %8d %9.3f %9.3f %s\n", IMAGE_NAMES[i], location.balls, location.true_positives, correct,
-			(double)correct / location.true_positives, (double)correct / location.balls, errors.c_str());
+		RecognitionResult result;
+		result.balls = location.balls;
+		result.located = location.true_positives;
+		result.correct = correct;
+		PrintRecognitionRow(IMAGE_NAMES[i], result, errors);
 		Save("6_recognition", title + " " + IMAGE_NAMES[i], DrawRecognition(table_images[i], detections[i], ball_for_detection, labels[i]));
-		total_balls += location.balls;
-		total_located += location.true_positives;
-		total_correct += correct;
+		total.balls += result.balls;
+		total.located += result.located;
+		total.correct += result.correct;
 	}
-	printf("%-10s %6d %8d %8d %9.3f %9.3f\n", "All", total_balls, total_located, total_correct,
-		(double)total_correct / total_located, (double)total_correct / total_balls);
+	PrintRecognitionRow("All", total, "");
 	if (show_confusion) PrintConfusionMatrix(confusion);
+	return total;
 }
 
 }
@@ -626,15 +642,17 @@ void MyApplication(){
 	const char* metric_names[4] = { "Bhattacharyya", "Correlation", "Intersection", "Chi-square" };
 	const int metrics[4] = { HISTCMP_BHATTACHARYYA, HISTCMP_CORREL, HISTCMP_INTERSECT, HISTCMP_CHISQR };
 	vector<int> labels[NUMBER_OF_IMAGES];
+	RecognitionResult metric_totals[4], recognition_totals[3];
 	for (int metric = 0; metric < 4; metric++) {
 		for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 			labels[i] = RecogniseByHistogram(hsv_images[i], references, hough_circles[i], metrics[metric]);
-		EvaluateRecognition(metric_names[metric], table_images, hough_detections, labels, metric == 0);
+		metric_totals[metric] = EvaluateRecognition(metric_names[metric], table_images, hough_detections, labels, metric == 0);
 	}
+	recognition_totals[0] = metric_totals[0];
 
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 		labels[i] = RecogniseByBackProjection(hsv_images[i], references, hough_circles[i]);
-	EvaluateRecognition("Back projection", table_images, hough_detections, labels, true);
+	recognition_totals[1] = EvaluateRecognition("Back projection", table_images, hough_detections, labels, true);
 
 	Mat bordered_training = AddTemplateBorder(table_images[0]);
 	vector<Mat> templates;
@@ -642,5 +660,16 @@ void MyApplication(){
 		templates.push_back(BallPatch(bordered_training, GroundTruthPosition(0, ball), 0));
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 		labels[i] = RecogniseByTemplate(AddTemplateBorder(table_images[i]), templates, hough_detections[i]);
-	EvaluateRecognition("Template matching", table_images, hough_detections, labels, true);
+	recognition_totals[2] = EvaluateRecognition("Template matching", table_images, hough_detections, labels, true);
+
+	cout << endl << "Comparison of the histogram metrics (Table1 to Table6):" << endl;
+	PrintRecognitionHeader("Metric", "");
+	for (int metric = 0; metric < 4; metric++)
+		PrintRecognitionRow(metric_names[metric], metric_totals[metric], "");
+
+	const char* recognition_names[3] = { "Histogram", "Back projection", "Template matching" };
+	cout << endl << "Comparison of the recognition methods, with the Bhattacharyya histogram metric (Table1 to Table6):" << endl;
+	PrintRecognitionHeader("Method", "");
+	for (int method = 0; method < 3; method++)
+		PrintRecognitionRow(recognition_names[method], recognition_totals[method], "");
 }
