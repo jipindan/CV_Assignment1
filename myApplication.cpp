@@ -49,6 +49,11 @@ const double WATERSHED_CANNY_HIGH = 200;
 const double WATERSHED_MARKER_DISTANCE = 2.0;
 const int WATERSHED_MAX_AREA = 3000;
 
+const int BALL_HUE_BINS = 12;
+const int BALL_SATURATION_BINS = 4;
+const int BALL_VALUE_BINS = 4;
+const double MAX_BALL_DISTANCE = 0.6;
+
 void Save(const string& folder, const string& name, const Mat& image){
 	string directory = string(RESULTS_LOCATION) + folder;
 	utils::fs::createDirectories(directory);
@@ -159,7 +164,7 @@ vector<Point2f> PointsOnTable(const vector<Point2f>& image_points, const Mat& ho
 	return on_table;
 }
 
-vector<Point2f> LocateByHough(const Mat& image, const Mat& homography, const string& name){
+vector<Point2f> LocateByHough(const Mat& image, const Mat& homography, const string& name, vector<Vec3f>& circles_on_table){
 	Mat grey;
 	cvtColor(image, grey, COLOR_BGR2GRAY);
 	GaussianBlur(grey, grey, Size(HOUGH_SMOOTHING_SIZE, HOUGH_SMOOTHING_SIZE), 0);
@@ -171,13 +176,17 @@ vector<Point2f> LocateByHough(const Mat& image, const Mat& homography, const str
 	HoughCircles(grey, circles, HOUGH_GRADIENT, 1, HOUGH_MIN_CENTRE_DISTANCE, HOUGH_CANNY_THRESHOLD,
 		HOUGH_ACCUMULATOR_THRESHOLD, HOUGH_MIN_RADIUS, HOUGH_MAX_RADIUS);
 	Mat display = image.clone();
-	vector<Point2f> centres;
+	vector<Point2f> detections;
+	circles_on_table.clear();
 	for (size_t i = 0; i < circles.size(); i++) {
-		circle(display, Point2f(circles[i][0], circles[i][1]), (int)circles[i][2], Scalar(0, 0, 255), 2);
-		centres.push_back(Point2f(circles[i][0], circles[i][1]));
+		Point2f centre(circles[i][0], circles[i][1]);
+		circle(display, centre, (int)circles[i][2], Scalar(0, 0, 255), 2);
+		vector<Point2f> on_table = PointsOnTable(vector<Point2f>(1, centre), homography);
+		if (on_table.empty()) continue;
+		detections.push_back(on_table[0]);
+		circles_on_table.push_back(circles[i]);
 	}
 	Save("3_hough", name + " circles", display);
-	vector<Point2f> detections = PointsOnTable(centres, homography);
 	printf("%-8s %3d circles, %3d on the table\n", name.c_str(), (int)circles.size(), (int)detections.size());
 	return detections;
 }
@@ -272,9 +281,9 @@ struct LocationResult {
 	double total_error = 0, max_error = 0;
 };
 
-LocationResult EvaluateLocations(int image_index, const vector<Point2f>& detections, vector<bool>& detection_correct, vector<bool>& ball_found){
+LocationResult EvaluateLocations(int image_index, const vector<Point2f>& detections, vector<int>& ball_for_detection, vector<bool>& ball_found){
 	LocationResult result;
-	detection_correct.assign(detections.size(), false);
+	ball_for_detection.assign(detections.size(), -1);
 	ball_found.assign(NUMBER_OF_BALLS, false);
 	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
 		if (!BallOnTable(image_index, ball)) continue;
@@ -289,7 +298,7 @@ LocationResult EvaluateLocations(int image_index, const vector<Point2f>& detecti
 			}
 		}
 		if (closest_detection < 0) continue;
-		detection_correct[closest_detection] = true;
+		ball_for_detection[closest_detection] = ball;
 		ball_found[ball] = true;
 		result.true_positives++;
 		result.total_error += closest;
@@ -310,7 +319,7 @@ void PrintLocationRow(const string& name, const LocationResult& r){
 }
 
 Mat DrawLocations(const Mat& table_image, int image_index, const vector<Point2f>& detections,
-	const vector<bool>& detection_correct, const vector<bool>& ball_found){
+	const vector<int>& ball_for_detection, const vector<bool>& ball_found){
 	Mat display = table_image.clone();
 	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
 		if (!BallOnTable(image_index, ball) || ball_found[ball]) continue;
@@ -319,7 +328,7 @@ Mat DrawLocations(const Mat& table_image, int image_index, const vector<Point2f>
 		putText(display, BALL_NAMES[ball], p + Point2f(10, -10), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 0, 0), 2);
 	}
 	for (size_t detection = 0; detection < detections.size(); detection++) {
-		Scalar colour = detection_correct[detection] ? Scalar(0, 255, 0) : Scalar(0, 0, 255);
+		Scalar colour = (ball_for_detection[detection] >= 0) ? Scalar(0, 255, 0) : Scalar(0, 0, 255);
 		circle(display, detections[detection], (int)BALL_RADIUS, colour, 2);
 	}
 	return display;
@@ -334,10 +343,11 @@ LocationResult EvaluateMethod(const string& title, const string& folder, const M
 	PrintLocationHeader("Image");
 	LocationResult total;
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++) {
-		vector<bool> detection_correct, ball_found;
-		LocationResult result = EvaluateLocations(i, detections[i], detection_correct, ball_found);
+		vector<int> ball_for_detection;
+		vector<bool> ball_found;
+		LocationResult result = EvaluateLocations(i, detections[i], ball_for_detection, ball_found);
 		PrintLocationRow(IMAGE_NAMES[i], result);
-		Save(folder, string(IMAGE_NAMES[i]) + " locations", DrawLocations(table_images[i], i, detections[i], detection_correct, ball_found));
+		Save(folder, string(IMAGE_NAMES[i]) + " locations", DrawLocations(table_images[i], i, detections[i], ball_for_detection, ball_found));
 		total.balls += result.balls;
 		total.true_positives += result.true_positives;
 		total.false_positives += result.false_positives;
@@ -347,6 +357,132 @@ LocationResult EvaluateMethod(const string& title, const string& folder, const M
 	}
 	PrintLocationRow("All", total);
 	return total;
+}
+
+Mat BallHistogram(const Mat& hsv_image, const Vec3f& ball_circle){
+	Mat mask(hsv_image.size(), CV_8U, Scalar(0));
+	circle(mask, Point2f(ball_circle[0], ball_circle[1]), (int)ball_circle[2], Scalar(255), FILLED);
+	int channels[] = { 0, 1, 2 };
+	int sizes[] = { BALL_HUE_BINS, BALL_SATURATION_BINS, BALL_VALUE_BINS };
+	float hue_range[] = { 0, 180 };
+	float saturation_range[] = { 0, 256 };
+	float value_range[] = { 0, 256 };
+	const float* ranges[] = { hue_range, saturation_range, value_range };
+	Mat histogram;
+	calcHist(&hsv_image, 1, channels, mask, histogram, 3, sizes, ranges);
+	normalize(histogram, histogram, 1, 0, NORM_L1);
+	return histogram;
+}
+
+vector<Mat> ReferenceHistograms(const Mat& hsv_image, const Mat& homography, const vector<Vec3f>& training_circles){
+	vector<float> radii;
+	for (size_t i = 0; i < training_circles.size(); i++)
+		radii.push_back(training_circles[i][2]);
+	sort(radii.begin(), radii.end());
+	float radius = radii[radii.size() / 2];
+	cout << "Reference ball radius: " << radius << " pixels" << endl;
+
+	vector<Mat> references;
+	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
+		vector<Point2f> table_point(1, GroundTruthPosition(0, ball)), image_point;
+		perspectiveTransform(table_point, image_point, homography.inv());
+		references.push_back(BallHistogram(hsv_image, Vec3f(image_point[0].x, image_point[0].y, radius)));
+	}
+	return references;
+}
+
+void RejectPockets(const Mat& hsv_image, const vector<Mat>& references, vector<Vec3f>& ball_circles, vector<Point2f>& detections, const string& name){
+	vector<Vec3f> kept_circles;
+	vector<Point2f> kept_detections;
+	for (size_t i = 0; i < ball_circles.size(); i++) {
+		Mat histogram = BallHistogram(hsv_image, ball_circles[i]);
+		double smallest = 2.0;
+		for (int ball = 0; ball < NUMBER_OF_BALLS; ball++)
+			smallest = min(smallest, compareHist(histogram, references[ball], HISTCMP_BHATTACHARYYA));
+		if (smallest > MAX_BALL_DISTANCE) {
+			printf("%-8s rejected (%4.0f,%4.0f) distance %.3f\n", name.c_str(), detections[i].y, detections[i].x, smallest);
+			continue;
+		}
+		kept_circles.push_back(ball_circles[i]);
+		kept_detections.push_back(detections[i]);
+	}
+	ball_circles = kept_circles;
+	detections = kept_detections;
+}
+
+vector<int> RecogniseByHistogram(const Mat& hsv_image, const vector<Mat>& references, const vector<Vec3f>& ball_circles, int metric){
+	bool larger_is_better = (metric == HISTCMP_CORREL || metric == HISTCMP_INTERSECT);
+	vector<int> labels;
+	for (size_t i = 0; i < ball_circles.size(); i++) {
+		Mat histogram = BallHistogram(hsv_image, ball_circles[i]);
+		int best_ball = 0;
+		double best_score = compareHist(histogram, references[0], metric);
+		for (int ball = 1; ball < NUMBER_OF_BALLS; ball++) {
+			double score = compareHist(histogram, references[ball], metric);
+			if (larger_is_better ? (score > best_score) : (score < best_score)) {
+				best_score = score;
+				best_ball = ball;
+			}
+		}
+		labels.push_back(best_ball);
+	}
+	return labels;
+}
+
+Mat DrawRecognition(const Mat& table_image, const vector<Point2f>& detections, const vector<int>& ball_for_detection, const vector<int>& labels){
+	Mat display = table_image.clone();
+	for (size_t detection = 0; detection < detections.size(); detection++) {
+		int actual = ball_for_detection[detection];
+		Scalar colour = (actual < 0) ? Scalar(0, 165, 255) : (actual == labels[detection]) ? Scalar(0, 255, 0) : Scalar(0, 0, 255);
+		circle(display, detections[detection], (int)BALL_RADIUS, colour, 2);
+		putText(display, BALL_NAMES[labels[detection]], detections[detection] + Point2f(24, -8), FONT_HERSHEY_SIMPLEX, 0.8, colour, 2);
+	}
+	return display;
+}
+
+void PrintConfusionMatrix(const int confusion[NUMBER_OF_BALLS][NUMBER_OF_BALLS]){
+	cout << "Confusion matrix (rows = actual ball, columns = recognised ball):" << endl << "    ";
+	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++)
+		printf("%3s", BALL_NAMES[ball]);
+	printf("\n");
+	for (int actual = 0; actual < NUMBER_OF_BALLS; actual++) {
+		printf("%3s ", BALL_NAMES[actual]);
+		for (int recognised = 0; recognised < NUMBER_OF_BALLS; recognised++) {
+			if (confusion[actual][recognised]) printf("%3d", confusion[actual][recognised]);
+			else printf("%3s", ".");
+		}
+		printf("\n");
+	}
+}
+
+void EvaluateRecognition(const string& title, const Mat table_images[], const vector<Point2f> detections[], const vector<int> labels[], bool show_confusion){
+	cout << endl << title << " recognition:" << endl;
+	printf("%-10s %6s %8s %8s %9s %9s  %s\n", "Image", "Balls", "Located", "Correct", "Accuracy", "Overall", "Errors (actual->recognised)");
+	int confusion[NUMBER_OF_BALLS][NUMBER_OF_BALLS] = {};
+	int total_balls = 0, total_located = 0, total_correct = 0;
+	for (int i = 1; i < NUMBER_OF_IMAGES; i++) {
+		vector<int> ball_for_detection;
+		vector<bool> ball_found;
+		LocationResult location = EvaluateLocations(i, detections[i], ball_for_detection, ball_found);
+		int correct = 0;
+		string errors;
+		for (size_t detection = 0; detection < detections[i].size(); detection++) {
+			int actual = ball_for_detection[detection];
+			if (actual < 0) continue;
+			confusion[actual][labels[i][detection]]++;
+			if (labels[i][detection] == actual) correct++;
+			else errors += string(" ") + BALL_NAMES[actual] + "->" + BALL_NAMES[labels[i][detection]];
+		}
+		printf("%-10s %6d %8d %8d %9.3f %9.3f %s\n", IMAGE_NAMES[i], location.balls, location.true_positives, correct,
+			(double)correct / location.true_positives, (double)correct / location.balls, errors.c_str());
+		Save("6_recognition", title + " " + IMAGE_NAMES[i], DrawRecognition(table_images[i], detections[i], ball_for_detection, labels[i]));
+		total_balls += location.balls;
+		total_located += location.true_positives;
+		total_correct += correct;
+	}
+	printf("%-10s %6d %8d %8d %9.3f %9.3f\n", "All", total_balls, total_located, total_correct,
+		(double)total_correct / total_located, (double)total_correct / total_balls);
+	if (show_confusion) PrintConfusionMatrix(confusion);
 }
 
 }
@@ -393,8 +529,12 @@ void MyApplication(){
 	totals[1] = EvaluateMethod("Background subtraction", "2_background", table_images, detections);
 
 	cout << endl << "Method 3: Hough circles" << endl;
-	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
-		detections[i] = LocateByHough(images[i], homography, IMAGE_NAMES[i]);
+	vector<Vec3f> hough_circles[NUMBER_OF_IMAGES];
+	for (int i = 0; i < NUMBER_OF_IMAGES; i++)
+		detections[i] = LocateByHough(images[i], homography, IMAGE_NAMES[i], hough_circles[i]);
+	vector<Point2f> hough_detections[NUMBER_OF_IMAGES];
+	for (int i = 0; i < NUMBER_OF_IMAGES; i++)
+		hough_detections[i] = detections[i];
 	totals[2] = EvaluateMethod("Hough circles", "3_hough", table_images, detections);
 
 	cout << endl << "Method 4: k-means clustering of colours" << endl;
@@ -412,4 +552,22 @@ void MyApplication(){
 	PrintLocationHeader("Method");
 	for (int method = 0; method < 5; method++)
 		PrintLocationRow(method_names[method], totals[method]);
+
+	cout << endl << "Recognition: rejecting the circles unlike every reference ball" << endl;
+	Mat hsv_images[NUMBER_OF_IMAGES];
+	for (int i = 0; i < NUMBER_OF_IMAGES; i++)
+		cvtColor(images[i], hsv_images[i], COLOR_BGR2HSV);
+	vector<Mat> references = ReferenceHistograms(hsv_images[0], homography, hough_circles[0]);
+	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
+		RejectPockets(hsv_images[i], references, hough_circles[i], hough_detections[i], IMAGE_NAMES[i]);
+	EvaluateMethod("Hough circles after rejection", "6_recognition", table_images, hough_detections);
+
+	const char* metric_names[4] = { "Bhattacharyya", "Correlation", "Intersection", "Chi-square" };
+	const int metrics[4] = { HISTCMP_BHATTACHARYYA, HISTCMP_CORREL, HISTCMP_INTERSECT, HISTCMP_CHISQR };
+	vector<int> labels[NUMBER_OF_IMAGES];
+	for (int metric = 0; metric < 4; metric++) {
+		for (int i = 1; i < NUMBER_OF_IMAGES; i++)
+			labels[i] = RecogniseByHistogram(hsv_images[i], references, hough_circles[i], metrics[metric]);
+		EvaluateRecognition(metric_names[metric], table_images, hough_detections, labels, metric == 0);
+	}
 }
