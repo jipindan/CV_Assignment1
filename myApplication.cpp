@@ -49,10 +49,15 @@ const double WATERSHED_CANNY_HIGH = 200;
 const double WATERSHED_MARKER_DISTANCE = 2.0;
 const int WATERSHED_MAX_AREA = 3000;
 
-const int BALL_HUE_BINS = 12;
-const int BALL_SATURATION_BINS = 4;
-const int BALL_VALUE_BINS = 4;
+const int BALL_HISTOGRAM_CHANNELS[3] = { 0, 1, 2 };
+const int BALL_HISTOGRAM_SIZES[3] = { 12, 4, 4 };
+const float BALL_HUE_RANGE[2] = { 0, 180 };
+const float BALL_SATURATION_RANGE[2] = { 0, 256 };
+const float BALL_VALUE_RANGE[2] = { 0, 256 };
+const float* BALL_HISTOGRAM_RANGES[3] = { BALL_HUE_RANGE, BALL_SATURATION_RANGE, BALL_VALUE_RANGE };
 const double MAX_BALL_DISTANCE = 0.6;
+const int TEMPLATE_HALF_SIZE = 21;
+const int TEMPLATE_SEARCH_MARGIN = 10;
 
 void Save(const string& folder, const string& name, const Mat& image){
 	string directory = string(RESULTS_LOCATION) + folder;
@@ -359,17 +364,15 @@ LocationResult EvaluateMethod(const string& title, const string& folder, const M
 	return total;
 }
 
-Mat BallHistogram(const Mat& hsv_image, const Vec3f& ball_circle){
-	Mat mask(hsv_image.size(), CV_8U, Scalar(0));
+Mat BallMask(const Mat& image, const Vec3f& ball_circle){
+	Mat mask(image.size(), CV_8U, Scalar(0));
 	circle(mask, Point2f(ball_circle[0], ball_circle[1]), (int)ball_circle[2], Scalar(255), FILLED);
-	int channels[] = { 0, 1, 2 };
-	int sizes[] = { BALL_HUE_BINS, BALL_SATURATION_BINS, BALL_VALUE_BINS };
-	float hue_range[] = { 0, 180 };
-	float saturation_range[] = { 0, 256 };
-	float value_range[] = { 0, 256 };
-	const float* ranges[] = { hue_range, saturation_range, value_range };
+	return mask;
+}
+
+Mat BallHistogram(const Mat& hsv_image, const Vec3f& ball_circle){
 	Mat histogram;
-	calcHist(&hsv_image, 1, channels, mask, histogram, 3, sizes, ranges);
+	calcHist(&hsv_image, 1, BALL_HISTOGRAM_CHANNELS, BallMask(hsv_image, ball_circle), histogram, 3, BALL_HISTOGRAM_SIZES, BALL_HISTOGRAM_RANGES);
 	normalize(histogram, histogram, 1, 0, NORM_L1);
 	return histogram;
 }
@@ -420,6 +423,64 @@ vector<int> RecogniseByHistogram(const Mat& hsv_image, const vector<Mat>& refere
 		for (int ball = 1; ball < NUMBER_OF_BALLS; ball++) {
 			double score = compareHist(histogram, references[ball], metric);
 			if (larger_is_better ? (score > best_score) : (score < best_score)) {
+				best_score = score;
+				best_ball = ball;
+			}
+		}
+		labels.push_back(best_ball);
+	}
+	return labels;
+}
+
+vector<int> RecogniseByBackProjection(const Mat& hsv_image, const vector<Mat>& references, const vector<Vec3f>& ball_circles){
+	vector<Mat> probabilities(NUMBER_OF_BALLS);
+	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
+		Mat histogram;
+		normalize(references[ball], histogram, 0, 255, NORM_MINMAX);
+		calcBackProject(&hsv_image, 1, BALL_HISTOGRAM_CHANNELS, histogram, probabilities[ball], BALL_HISTOGRAM_RANGES);
+	}
+	vector<int> labels;
+	for (size_t i = 0; i < ball_circles.size(); i++) {
+		Mat mask = BallMask(hsv_image, ball_circles[i]);
+		int best_ball = 0;
+		double best_score = -1;
+		for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
+			double score = mean(probabilities[ball], mask)[0];
+			if (score > best_score) {
+				best_score = score;
+				best_ball = ball;
+			}
+		}
+		labels.push_back(best_ball);
+	}
+	return labels;
+}
+
+Mat AddTemplateBorder(const Mat& table_image){
+	int border = TEMPLATE_HALF_SIZE + TEMPLATE_SEARCH_MARGIN;
+	Mat bordered;
+	copyMakeBorder(table_image, bordered, border, border, border, border, BORDER_REPLICATE);
+	return bordered;
+}
+
+Mat BallPatch(const Mat& bordered_image, Point2f table_position, int margin){
+	int border = TEMPLATE_HALF_SIZE + TEMPLATE_SEARCH_MARGIN;
+	int half_size = TEMPLATE_HALF_SIZE + margin;
+	return bordered_image(Rect((int)table_position.x + border - half_size, (int)table_position.y + border - half_size, 2 * half_size + 1, 2 * half_size + 1));
+}
+
+vector<int> RecogniseByTemplate(const Mat& bordered_image, const vector<Mat>& templates, const vector<Point2f>& detections){
+	vector<int> labels;
+	for (size_t i = 0; i < detections.size(); i++) {
+		Mat search_area = BallPatch(bordered_image, detections[i], TEMPLATE_SEARCH_MARGIN);
+		int best_ball = 0;
+		double best_score = -1;
+		for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
+			Mat correlation;
+			matchTemplate(search_area, templates[ball], correlation, TM_CCORR_NORMED);
+			double score;
+			minMaxLoc(correlation, 0, &score);
+			if (score > best_score) {
 				best_score = score;
 				best_ball = ball;
 			}
@@ -570,4 +631,16 @@ void MyApplication(){
 			labels[i] = RecogniseByHistogram(hsv_images[i], references, hough_circles[i], metrics[metric]);
 		EvaluateRecognition(metric_names[metric], table_images, hough_detections, labels, metric == 0);
 	}
+
+	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
+		labels[i] = RecogniseByBackProjection(hsv_images[i], references, hough_circles[i]);
+	EvaluateRecognition("Back projection", table_images, hough_detections, labels, true);
+
+	Mat bordered_training = AddTemplateBorder(table_images[0]);
+	vector<Mat> templates;
+	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++)
+		templates.push_back(BallPatch(bordered_training, GroundTruthPosition(0, ball), 0));
+	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
+		labels[i] = RecogniseByTemplate(AddTemplateBorder(table_images[i]), templates, hough_detections[i]);
+	EvaluateRecognition("Template matching", table_images, hough_detections, labels, true);
 }
