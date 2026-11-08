@@ -1,0 +1,32 @@
+AllBalls: 1931 x 509 pixels
+Table1: 1931 x 509 pixels
+Table2: 1931 x 509 pixels
+Table3: 1931 x 509 pixels
+Table4: 1931 x 509 pixels
+Table5: 1931 x 509 pixels
+Table6: 1931 x 509 pixels
+
+Perspective transformation:
+[1.22626512512447, 0.8390235066641109, -442.6171699001902;
+ 0.02805259519075561, 2.470632133585815, -95.92584925478816;
+ 1.372576279739869e-05, 0.001208194988401226, 1]
+
+Cloth sample: 904030 pixels
+Table1   Otsu threshold 109.0,  16 regions,   3 large enough
+Table2   Otsu threshold 109.0,  23 regions,   6 large enough
+Table3   Otsu threshold 109.0,  14 regions,   7 large enough
+Table4   Otsu threshold 109.0,  14 regions,   6 large enough
+Table5   Otsu threshold 109.0,  12 regions,   6 large enough
+Table6   Otsu threshold 109.0,  12 regions,   5 large enough
+
+Back projection results:
+Image     Balls   TP   FP   FN  Precision   Recall     F1   MeanErr    MaxErr
+Table1       16    0    3   16      0.000    0.000  0.000       0.0       0.0
+Table2       16    3    3   13      0.500    0.188  0.273      14.8      18.7
+Table3       16    4    3   12      0.571    0.250  0.348      14.4      19.4
+Table4       15    2    4   13      0.333    0.133  0.190       9.7      11.2
+Table5       14    2    4   12      0.333    0.143  0.200      13.4      13.7
+Table6       13    1    4   12      0.200    0.077  0.111       6.6       6.6
+All          90   12   21   78      0.364    0.133  0.195      12.9      19.4
+
+Press any key in an image window to finish.

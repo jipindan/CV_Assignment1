@@ -1,0 +1,4 @@
+OpenCVExample/
+.DS_Store
+.idea/
+cmake-build-*/
