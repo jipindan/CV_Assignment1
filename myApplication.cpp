@@ -58,6 +58,8 @@ const float* BALL_HISTOGRAM_RANGES[3] = { BALL_HUE_RANGE, BALL_SATURATION_RANGE,
 const double MAX_BALL_DISTANCE = 0.6;
 const int TEMPLATE_HALF_SIZE = 21;
 const int TEMPLATE_SEARCH_MARGIN = 10;
+const int WHITE_MAX_SATURATION = 59;
+const int WHITE_MIN_VALUE = 151;
 
 void Save(const string& folder, const string& name, const Mat& image){
 	string directory = string(RESULTS_LOCATION) + folder;
@@ -296,6 +298,7 @@ LocationResult EvaluateLocations(int image_index, const vector<Point2f>& detecti
 		double closest = BALL_RADIUS;
 		int closest_detection = -1;
 		for (size_t detection = 0; detection < detections.size(); detection++) {
+			if (ball_for_detection[detection] >= 0) continue;
 			double distance = norm(detections[detection] - GroundTruthPosition(image_index, ball));
 			if (distance <= closest) {
 				closest = distance;
@@ -377,7 +380,7 @@ Mat BallHistogram(const Mat& hsv_image, const Vec3f& ball_circle){
 	return histogram;
 }
 
-vector<Mat> ReferenceHistograms(const Mat& image, const Mat& hsv_image, const Mat& homography, const vector<Vec3f>& training_circles){
+vector<Mat> ReferenceHistograms(const Mat& image, const Mat& hsv_image, const Mat& homography, const vector<Vec3f>& training_circles, vector<Vec3f>& reference_circles){
 	vector<float> radii;
 	for (size_t i = 0; i < training_circles.size(); i++)
 		radii.push_back(training_circles[i][2]);
@@ -390,7 +393,8 @@ vector<Mat> ReferenceHistograms(const Mat& image, const Mat& hsv_image, const Ma
 	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
 		vector<Point2f> table_point(1, GroundTruthPosition(0, ball)), image_point;
 		perspectiveTransform(table_point, image_point, homography.inv());
-		references.push_back(BallHistogram(hsv_image, Vec3f(image_point[0].x, image_point[0].y, radius)));
+		reference_circles.push_back(Vec3f(image_point[0].x, image_point[0].y, radius));
+		references.push_back(BallHistogram(hsv_image, reference_circles[ball]));
 		circle(display, image_point[0], (int)radius, Scalar(0, 255, 255), 2);
 		putText(display, BALL_NAMES[ball], image_point[0] + Point2f(-10, -radius - 4), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 255, 255), 2);
 	}
@@ -478,7 +482,7 @@ Mat BallPatch(const Mat& bordered_image, Point2f table_position, int margin){
 	return bordered_image(Rect((int)table_position.x + border - half_size, (int)table_position.y + border - half_size, 2 * half_size + 1, 2 * half_size + 1));
 }
 
-vector<int> RecogniseByTemplate(const Mat& bordered_image, const vector<Mat>& templates, const vector<Point2f>& detections){
+vector<int> RecogniseByTemplate(const Mat& bordered_image, const vector<Mat>& templates, const vector<Point2f>& detections, int matching_method){
 	vector<int> labels;
 	for (size_t i = 0; i < detections.size(); i++) {
 		Mat search_area = BallPatch(bordered_image, detections[i], TEMPLATE_SEARCH_MARGIN);
@@ -486,7 +490,7 @@ vector<int> RecogniseByTemplate(const Mat& bordered_image, const vector<Mat>& te
 		double best_score = -1;
 		for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
 			Mat correlation;
-			matchTemplate(search_area, templates[ball], correlation, TM_CCORR_NORMED);
+			matchTemplate(search_area, templates[ball], correlation, matching_method);
 			double score;
 			minMaxLoc(correlation, 0, &score);
 			if (score > best_score) {
@@ -522,6 +526,28 @@ void PrintConfusionMatrix(const int confusion[NUMBER_OF_BALLS][NUMBER_OF_BALLS])
 			else printf("%3s", ".");
 		}
 		printf("\n");
+	}
+}
+
+double WhiteFraction(const Mat& hsv_image, const Vec3f& ball_circle){
+	Mat mask = BallMask(hsv_image, ball_circle), white;
+	inRange(hsv_image, Scalar(0, 0, WHITE_MIN_VALUE), Scalar(180, WHITE_MAX_SATURATION, 255), white);
+	return (double)countNonZero(white & mask) / countNonZero(mask);
+}
+
+void PrintWhiteFractions(const Mat hsv_images[], const vector<Vec3f> ball_circles[], const vector<Point2f> detections[], const vector<int> labels[], const vector<Vec3f>& reference_circles){
+	cout << endl << "White fraction of the balls recognised wrongly:" << endl;
+	printf("%-8s %8s %8s %16s %20s\n", "Image", "Error", "Ball", "Actual reference", "Recognised reference");
+	for (int i = 1; i < NUMBER_OF_IMAGES; i++) {
+		vector<int> ball_for_detection;
+		vector<bool> ball_found;
+		EvaluateLocations(i, detections[i], ball_for_detection, ball_found);
+		for (size_t detection = 0; detection < detections[i].size(); detection++) {
+			int actual = ball_for_detection[detection], recognised = labels[i][detection];
+			if (actual < 0 || actual == recognised) continue;
+			printf("%-8s %5s->%-2s %8.2f %16.2f %20.2f\n", IMAGE_NAMES[i], BALL_NAMES[actual], BALL_NAMES[recognised], WhiteFraction(hsv_images[i], ball_circles[i][detection]),
+				WhiteFraction(hsv_images[0], reference_circles[actual]), WhiteFraction(hsv_images[0], reference_circles[recognised]));
+		}
 	}
 }
 
@@ -643,7 +669,8 @@ void MyApplication(){
 	Mat hsv_images[NUMBER_OF_IMAGES];
 	for (int i = 0; i < NUMBER_OF_IMAGES; i++)
 		cvtColor(images[i], hsv_images[i], COLOR_BGR2HSV);
-	vector<Mat> references = ReferenceHistograms(images[0], hsv_images[0], homography, hough_circles[0]);
+	vector<Vec3f> reference_circles;
+	vector<Mat> references = ReferenceHistograms(images[0], hsv_images[0], homography, hough_circles[0], reference_circles);
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 		RejectPockets(images[i], hsv_images[i], references, hough_circles[i], hough_detections[i], IMAGE_NAMES[i]);
 	EvaluateMethod("Hough circles after rejection", "6_recognition", table_images, hough_detections);
@@ -656,6 +683,7 @@ void MyApplication(){
 		for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 			labels[i] = RecogniseByHistogram(hsv_images[i], references, hough_circles[i], metrics[metric]);
 		metric_totals[metric] = EvaluateRecognition(metric_names[metric], table_images, hough_detections, labels, metric == 0);
+		if (metric == 0) PrintWhiteFractions(hsv_images, hough_circles, hough_detections, labels, reference_circles);
 	}
 	recognition_totals[0] = metric_totals[0];
 
@@ -673,8 +701,11 @@ void MyApplication(){
 	vconcat(top_row, bottom_row, all_templates);
 	Save("6_recognition", "AllBalls templates", all_templates);
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
-		labels[i] = RecogniseByTemplate(AddTemplateBorder(table_images[i]), templates, hough_detections[i]);
+		labels[i] = RecogniseByTemplate(AddTemplateBorder(table_images[i]), templates, hough_detections[i], TM_CCORR_NORMED);
 	recognition_totals[2] = EvaluateRecognition("Template matching", table_images, hough_detections, labels, true);
+	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
+		labels[i] = RecogniseByTemplate(AddTemplateBorder(table_images[i]), templates, hough_detections[i], TM_CCOEFF_NORMED);
+	EvaluateRecognition("Template matching zero mean", table_images, hough_detections, labels, true);
 
 	cout << endl << "Comparison of the histogram metrics (Table1 to Table6):" << endl;
 	PrintRecognitionHeader("Metric", "");
