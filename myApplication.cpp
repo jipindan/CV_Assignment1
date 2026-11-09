@@ -377,7 +377,7 @@ Mat BallHistogram(const Mat& hsv_image, const Vec3f& ball_circle){
 	return histogram;
 }
 
-vector<Mat> ReferenceHistograms(const Mat& hsv_image, const Mat& homography, const vector<Vec3f>& training_circles){
+vector<Mat> ReferenceHistograms(const Mat& image, const Mat& hsv_image, const Mat& homography, const vector<Vec3f>& training_circles){
 	vector<float> radii;
 	for (size_t i = 0; i < training_circles.size(); i++)
 		radii.push_back(training_circles[i][2]);
@@ -386,22 +386,29 @@ vector<Mat> ReferenceHistograms(const Mat& hsv_image, const Mat& homography, con
 	cout << "Reference ball radius: " << radius << " pixels" << endl;
 
 	vector<Mat> references;
+	Mat display = image.clone();
 	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
 		vector<Point2f> table_point(1, GroundTruthPosition(0, ball)), image_point;
 		perspectiveTransform(table_point, image_point, homography.inv());
 		references.push_back(BallHistogram(hsv_image, Vec3f(image_point[0].x, image_point[0].y, radius)));
+		circle(display, image_point[0], (int)radius, Scalar(0, 255, 255), 2);
+		putText(display, BALL_NAMES[ball], image_point[0] + Point2f(-10, -radius - 4), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 255, 255), 2);
 	}
+	Save("6_recognition", "AllBalls reference discs", display);
 	return references;
 }
 
-void RejectPockets(const Mat& hsv_image, const vector<Mat>& references, vector<Vec3f>& ball_circles, vector<Point2f>& detections, const string& name){
+void RejectPockets(const Mat& image, const Mat& hsv_image, const vector<Mat>& references, vector<Vec3f>& ball_circles, vector<Point2f>& detections, const string& name){
 	vector<Vec3f> kept_circles;
 	vector<Point2f> kept_detections;
+	Mat display = image.clone();
 	for (size_t i = 0; i < ball_circles.size(); i++) {
 		Mat histogram = BallHistogram(hsv_image, ball_circles[i]);
 		double smallest = 2.0;
 		for (int ball = 0; ball < NUMBER_OF_BALLS; ball++)
 			smallest = min(smallest, compareHist(histogram, references[ball], HISTCMP_BHATTACHARYYA));
+		Scalar colour = (smallest > MAX_BALL_DISTANCE) ? Scalar(0, 0, 255) : Scalar(0, 255, 0);
+		circle(display, Point2f(ball_circles[i][0], ball_circles[i][1]), (int)ball_circles[i][2], colour, 2);
 		if (smallest > MAX_BALL_DISTANCE) {
 			printf("%-8s rejected (%4.0f,%4.0f) distance %.3f\n", name.c_str(), detections[i].y, detections[i].x, smallest);
 			continue;
@@ -409,6 +416,7 @@ void RejectPockets(const Mat& hsv_image, const vector<Mat>& references, vector<V
 		kept_circles.push_back(ball_circles[i]);
 		kept_detections.push_back(detections[i]);
 	}
+	Save("6_recognition", name + " kept and rejected circles", display);
 	ball_circles = kept_circles;
 	detections = kept_detections;
 }
@@ -432,13 +440,14 @@ vector<int> RecogniseByHistogram(const Mat& hsv_image, const vector<Mat>& refere
 	return labels;
 }
 
-vector<int> RecogniseByBackProjection(const Mat& hsv_image, const vector<Mat>& references, const vector<Vec3f>& ball_circles){
+vector<int> RecogniseByBackProjection(const Mat& hsv_image, const vector<Mat>& references, const vector<Vec3f>& ball_circles, const string& name){
 	vector<Mat> probabilities(NUMBER_OF_BALLS);
 	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
 		Mat histogram;
 		normalize(references[ball], histogram, 0, 255, NORM_MINMAX);
 		calcBackProject(&hsv_image, 1, BALL_HISTOGRAM_CHANNELS, histogram, probabilities[ball], BALL_HISTOGRAM_RANGES);
 	}
+	Save("6_recognition", name + " back projection of ball 1", probabilities[1]);
 	vector<int> labels;
 	for (size_t i = 0; i < ball_circles.size(); i++) {
 		Mat mask = BallMask(hsv_image, ball_circles[i]);
@@ -634,9 +643,9 @@ void MyApplication(){
 	Mat hsv_images[NUMBER_OF_IMAGES];
 	for (int i = 0; i < NUMBER_OF_IMAGES; i++)
 		cvtColor(images[i], hsv_images[i], COLOR_BGR2HSV);
-	vector<Mat> references = ReferenceHistograms(hsv_images[0], homography, hough_circles[0]);
+	vector<Mat> references = ReferenceHistograms(images[0], hsv_images[0], homography, hough_circles[0]);
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
-		RejectPockets(hsv_images[i], references, hough_circles[i], hough_detections[i], IMAGE_NAMES[i]);
+		RejectPockets(images[i], hsv_images[i], references, hough_circles[i], hough_detections[i], IMAGE_NAMES[i]);
 	EvaluateMethod("Hough circles after rejection", "6_recognition", table_images, hough_detections);
 
 	const char* metric_names[4] = { "Bhattacharyya", "Correlation", "Intersection", "Chi-square" };
@@ -651,13 +660,18 @@ void MyApplication(){
 	recognition_totals[0] = metric_totals[0];
 
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
-		labels[i] = RecogniseByBackProjection(hsv_images[i], references, hough_circles[i]);
+		labels[i] = RecogniseByBackProjection(hsv_images[i], references, hough_circles[i], IMAGE_NAMES[i]);
 	recognition_totals[1] = EvaluateRecognition("Back projection", table_images, hough_detections, labels, true);
 
 	Mat bordered_training = AddTemplateBorder(table_images[0]);
 	vector<Mat> templates;
 	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++)
 		templates.push_back(BallPatch(bordered_training, GroundTruthPosition(0, ball), 0));
+	Mat top_row, bottom_row, all_templates;
+	hconcat(&templates[0], 8, top_row);
+	hconcat(&templates[8], 8, bottom_row);
+	vconcat(top_row, bottom_row, all_templates);
+	Save("6_recognition", "AllBalls templates", all_templates);
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 		labels[i] = RecogniseByTemplate(AddTemplateBorder(table_images[i]), templates, hough_detections[i]);
 	recognition_totals[2] = EvaluateRecognition("Template matching", table_images, hough_detections, labels, true);
