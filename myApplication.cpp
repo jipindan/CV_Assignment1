@@ -56,8 +56,6 @@ const float BALL_HUE_RANGE[2] = { 0, 180 };
 const float BALL_SATURATION_RANGE[2] = { 0, 256 };
 const float BALL_VALUE_RANGE[2] = { 0, 256 };
 const float* BALL_HISTOGRAM_RANGES[3] = { BALL_HUE_RANGE, BALL_SATURATION_RANGE, BALL_VALUE_RANGE };
-const int TEMPLATE_HALF_SIZE = 21;
-const int TEMPLATE_SEARCH_MARGIN = 10;
 const int WHITE_MAX_SATURATION = 59;
 const int WHITE_MIN_VALUE = 151;
 
@@ -529,36 +527,6 @@ vector<int> AssignNumbers(const vector<vector<double>>& costs, bool unique_numbe
 	return labels;
 }
 
-Mat AddTemplateBorder(const Mat& table_image){
-	int border = TEMPLATE_HALF_SIZE + TEMPLATE_SEARCH_MARGIN;
-	Mat bordered;
-	copyMakeBorder(table_image, bordered, border, border, border, border, BORDER_REPLICATE);
-	return bordered;
-}
-
-Mat BallPatch(const Mat& bordered_image, Point2f table_position, int margin){
-	int border = TEMPLATE_HALF_SIZE + TEMPLATE_SEARCH_MARGIN;
-	int half_size = TEMPLATE_HALF_SIZE + margin;
-	return bordered_image(Rect((int)table_position.x + border - half_size, (int)table_position.y + border - half_size, 2 * half_size + 1, 2 * half_size + 1));
-}
-
-vector<vector<double>> TemplateCosts(const Mat& bordered_image, const vector<Mat>& templates, const vector<Point2f>& detections, int matching_method){
-	vector<vector<double>> costs;
-	for (size_t i = 0; i < detections.size(); i++) {
-		Mat search_area = BallPatch(bordered_image, detections[i], TEMPLATE_SEARCH_MARGIN);
-		vector<double> ball_costs;
-		for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
-			Mat correlation;
-			matchTemplate(search_area, templates[ball], correlation, matching_method);
-			double score;
-			minMaxLoc(correlation, 0, &score);
-			ball_costs.push_back(-score);
-		}
-		costs.push_back(ball_costs);
-	}
-	return costs;
-}
-
 Mat DrawRecognition(const Mat& table_image, const vector<Point2f>& detections, const vector<int>& ball_for_detection, const vector<int>& labels){
 	Mat display = table_image.clone();
 	for (size_t detection = 0; detection < detections.size(); detection++) {
@@ -746,7 +714,7 @@ void MyApplication(){
 	const char* metric_names[4] = { "Bhattacharyya", "Correlation", "Intersection", "Chi-square" };
 	const int metrics[4] = { HISTCMP_BHATTACHARYYA, HISTCMP_CORREL, HISTCMP_INTERSECT, HISTCMP_CHISQR };
 	vector<vector<double>> costs[NUMBER_OF_IMAGES];
-	RecognitionResult metric_results[4][2], method_results[3][2];
+	RecognitionResult metric_results[4][2], method_results[2][2];
 	for (int metric = 0; metric < 4; metric++) {
 		for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 			costs[i] = HistogramCosts(hsv_images[i], references, hough_circles[i], metrics[metric]);
@@ -764,24 +732,7 @@ void MyApplication(){
 		costs[i] = BackProjectionCosts(hsv_images[i], references, hough_circles[i], IMAGE_NAMES[i]);
 	EvaluateWithAndWithoutUniqueNumbers("Back projection", costs, table_images, hough_detections, method_results[1]);
 
-	Mat bordered_training = AddTemplateBorder(table_images[0]);
-	vector<Mat> templates;
-	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++)
-		templates.push_back(BallPatch(bordered_training, GroundTruthPosition(0, ball), 0));
-	Mat top_row, bottom_row, all_templates;
-	hconcat(&templates[0], 8, top_row);
-	hconcat(&templates[8], 8, bottom_row);
-	vconcat(top_row, bottom_row, all_templates);
-	Save("6_recognition", "AllBalls templates", all_templates);
-	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
-		costs[i] = TemplateCosts(AddTemplateBorder(table_images[i]), templates, hough_detections[i], TM_CCORR_NORMED);
-	EvaluateWithAndWithoutUniqueNumbers("Template matching", costs, table_images, hough_detections, method_results[2]);
-	vector<int> labels[NUMBER_OF_IMAGES];
-	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
-		labels[i] = AssignNumbers(TemplateCosts(AddTemplateBorder(table_images[i]), templates, hough_detections[i], TM_CCOEFF_NORMED), false);
-	EvaluateRecognition("Template matching zero mean without unique numbers", table_images, hough_detections, labels);
-
 	PrintComparison("Comparison of the histogram metrics (Table1 to Table6):", metric_names, metric_results, 4);
-	const char* recognition_names[3] = { "Histogram", "Back projection", "Template matching" };
-	PrintComparison("Comparison of the recognition methods, with the Bhattacharyya histogram metric (Table1 to Table6):", recognition_names, method_results, 3);
+	const char* recognition_names[2] = { "Histogram", "Back projection" };
+	PrintComparison("Comparison of the recognition methods, with the Bhattacharyya histogram metric (Table1 to Table6):", recognition_names, method_results, 2);
 }
