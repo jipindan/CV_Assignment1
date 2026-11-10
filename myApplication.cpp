@@ -37,7 +37,8 @@ const int DIFFERENCE_THRESHOLD = 30;
 const int HOUGH_SMOOTHING_SIZE = 5;
 const double HOUGH_MIN_CENTRE_DISTANCE = 30;
 const double HOUGH_CANNY_THRESHOLD = 100;
-const double HOUGH_ACCUMULATOR_THRESHOLD = 20;
+const int HOUGH_FIRST_ACCUMULATOR_THRESHOLD = 5;
+const int HOUGH_LAST_ACCUMULATOR_THRESHOLD = 40;
 const int HOUGH_MIN_RADIUS = 17;
 const int HOUGH_MAX_RADIUS = 31;
 
@@ -55,7 +56,6 @@ const float BALL_HUE_RANGE[2] = { 0, 180 };
 const float BALL_SATURATION_RANGE[2] = { 0, 256 };
 const float BALL_VALUE_RANGE[2] = { 0, 256 };
 const float* BALL_HISTOGRAM_RANGES[3] = { BALL_HUE_RANGE, BALL_SATURATION_RANGE, BALL_VALUE_RANGE };
-const double MAX_BALL_DISTANCE = 0.6;
 const int TEMPLATE_HALF_SIZE = 21;
 const int TEMPLATE_SEARCH_MARGIN = 10;
 const int WHITE_MAX_SATURATION = 59;
@@ -171,31 +171,37 @@ vector<Point2f> PointsOnTable(const vector<Point2f>& image_points, const Mat& ho
 	return on_table;
 }
 
-vector<Point2f> LocateByHough(const Mat& image, const Mat& homography, const string& name, vector<Vec3f>& circles_on_table){
+Mat SmoothedGrey(const Mat& image){
 	Mat grey;
 	cvtColor(image, grey, COLOR_BGR2GRAY);
 	GaussianBlur(grey, grey, Size(HOUGH_SMOOTHING_SIZE, HOUGH_SMOOTHING_SIZE), 0);
-	Mat edges;
-	Canny(grey, edges, HOUGH_CANNY_THRESHOLD / 2, HOUGH_CANNY_THRESHOLD);
-	Save("3_hough", name + " edges", edges);
+	return grey;
+}
 
+vector<Point2f> LocateByHough(const Mat& image, const Mat& homography, double accumulator_threshold, vector<Vec3f>& circles_on_table){
 	vector<Vec3f> circles;
-	HoughCircles(grey, circles, HOUGH_GRADIENT, 1, HOUGH_MIN_CENTRE_DISTANCE, HOUGH_CANNY_THRESHOLD,
-		HOUGH_ACCUMULATOR_THRESHOLD, HOUGH_MIN_RADIUS, HOUGH_MAX_RADIUS);
-	Mat display = image.clone();
+	HoughCircles(SmoothedGrey(image), circles, HOUGH_GRADIENT, 1, HOUGH_MIN_CENTRE_DISTANCE, HOUGH_CANNY_THRESHOLD,
+		accumulator_threshold, HOUGH_MIN_RADIUS, HOUGH_MAX_RADIUS);
 	vector<Point2f> detections;
 	circles_on_table.clear();
 	for (size_t i = 0; i < circles.size(); i++) {
-		Point2f centre(circles[i][0], circles[i][1]);
-		circle(display, centre, (int)circles[i][2], Scalar(0, 0, 255), 2);
-		vector<Point2f> on_table = PointsOnTable(vector<Point2f>(1, centre), homography);
+		vector<Point2f> on_table = PointsOnTable(vector<Point2f>(1, Point2f(circles[i][0], circles[i][1])), homography);
 		if (on_table.empty()) continue;
 		detections.push_back(on_table[0]);
 		circles_on_table.push_back(circles[i]);
 	}
-	Save("3_hough", name + " circles", display);
-	printf("%-8s %3d circles, %3d on the table\n", name.c_str(), (int)circles.size(), (int)detections.size());
 	return detections;
+}
+
+void SaveHoughStages(const Mat& image, const vector<Vec3f>& circles_on_table, const string& name){
+	Mat edges;
+	Canny(SmoothedGrey(image), edges, HOUGH_CANNY_THRESHOLD / 2, HOUGH_CANNY_THRESHOLD);
+	Save("3_hough", name + " edges", edges);
+	Mat display = image.clone();
+	for (size_t i = 0; i < circles_on_table.size(); i++)
+		circle(display, Point2f(circles_on_table[i][0], circles_on_table[i][1]), (int)circles_on_table[i][2], Scalar(0, 0, 255), 2);
+	Save("3_hough", name + " circles", display);
+	printf("%-8s %3d circles on the table\n", name.c_str(), (int)circles_on_table.size());
 }
 
 Mat KMeansMask(const Mat& table_image, const string& name){
@@ -380,40 +386,80 @@ Mat BallHistogram(const Mat& hsv_image, const Vec3f& ball_circle){
 	return histogram;
 }
 
-vector<Mat> ReferenceHistograms(const Mat& image, const Mat& hsv_image, const Mat& homography, const vector<Vec3f>& training_circles, vector<Vec3f>& reference_circles){
+vector<Mat> ReferenceHistograms(const Mat& hsv_image, const Mat& homography, const vector<Vec3f>& training_circles, vector<Vec3f>& reference_circles){
 	vector<float> radii;
 	for (size_t i = 0; i < training_circles.size(); i++)
 		radii.push_back(training_circles[i][2]);
 	sort(radii.begin(), radii.end());
 	float radius = radii[radii.size() / 2];
-	cout << "Reference ball radius: " << radius << " pixels" << endl;
 
 	vector<Mat> references;
-	Mat display = image.clone();
+	reference_circles.clear();
 	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
 		vector<Point2f> table_point(1, GroundTruthPosition(0, ball)), image_point;
 		perspectiveTransform(table_point, image_point, homography.inv());
 		reference_circles.push_back(Vec3f(image_point[0].x, image_point[0].y, radius));
 		references.push_back(BallHistogram(hsv_image, reference_circles[ball]));
-		circle(display, image_point[0], (int)radius, Scalar(0, 255, 255), 2);
-		putText(display, BALL_NAMES[ball], image_point[0] + Point2f(-10, -radius - 4), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 255, 255), 2);
 	}
-	Save("6_recognition", "AllBalls reference discs", display);
 	return references;
 }
 
-void RejectPockets(const Mat& image, const Mat& hsv_image, const vector<Mat>& references, vector<Vec3f>& ball_circles, vector<Point2f>& detections, const string& name){
+double SmallestReferenceDistance(const Mat& hsv_image, const vector<Mat>& references, const Vec3f& ball_circle){
+	Mat histogram = BallHistogram(hsv_image, ball_circle);
+	double smallest = 2.0;
+	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++)
+		smallest = min(smallest, compareHist(histogram, references[ball], HISTCMP_BHATTACHARYYA));
+	return smallest;
+}
+
+double TrainOnAllBalls(const Mat& image, const Mat& hsv_image, const Mat& homography, double& max_ball_distance){
+	cout << "Training on AllBalls:" << endl;
+	printf("%-10s %4s %4s %4s %9s %9s %14s %14s\n", "Threshold", "TP", "FP", "FN", "MeanErr", "MaxErr", "BallDistance", "OtherDistance");
+	vector<int> best_thresholds;
+	vector<double> best_distances;
+	int most_balls = 0;
+	for (int threshold = HOUGH_FIRST_ACCUMULATOR_THRESHOLD; threshold <= HOUGH_LAST_ACCUMULATOR_THRESHOLD; threshold++) {
+		vector<Vec3f> circles, reference_circles;
+		vector<Point2f> detections = LocateByHough(image, homography, threshold, circles);
+		vector<int> ball_for_detection;
+		vector<bool> ball_found;
+		LocationResult result = EvaluateLocations(0, detections, ball_for_detection, ball_found);
+		vector<Mat> references = ReferenceHistograms(hsv_image, homography, circles, reference_circles);
+		double largest_ball_distance = 0, smallest_other_distance = 2.0;
+		for (size_t i = 0; i < circles.size(); i++) {
+			double distance = SmallestReferenceDistance(hsv_image, references, circles[i]);
+			if (ball_for_detection[i] >= 0) largest_ball_distance = max(largest_ball_distance, distance);
+			else smallest_other_distance = min(smallest_other_distance, distance);
+		}
+		printf("%-10d %4d %4d %4d %9.1f %9.1f %14.3f ", threshold, result.true_positives, result.false_positives, result.false_negatives,
+			result.total_error / result.true_positives, result.max_error, largest_ball_distance);
+		if (result.false_positives) printf("%14.3f\n", smallest_other_distance);
+		else printf("%14s\n", "none");
+		if (result.true_positives < most_balls || largest_ball_distance >= smallest_other_distance) continue;
+		if (result.true_positives > most_balls) {
+			most_balls = result.true_positives;
+			best_thresholds.clear();
+			best_distances.clear();
+		}
+		best_thresholds.push_back(threshold);
+		best_distances.push_back(smallest_other_distance);
+	}
+	size_t middle = best_thresholds.size() / 2;
+	max_ball_distance = best_distances[middle];
+	printf("%d balls kept and every other circle rejected for thresholds %d to %d\n", most_balls, best_thresholds.front(), best_thresholds.back());
+	printf("Accumulator threshold %d, distance threshold %.3f\n", best_thresholds[middle], max_ball_distance);
+	return best_thresholds[middle];
+}
+
+void RejectPockets(const Mat& image, const Mat& hsv_image, const vector<Mat>& references, double max_ball_distance, vector<Vec3f>& ball_circles, vector<Point2f>& detections, const string& name){
 	vector<Vec3f> kept_circles;
 	vector<Point2f> kept_detections;
 	Mat display = image.clone();
 	for (size_t i = 0; i < ball_circles.size(); i++) {
-		Mat histogram = BallHistogram(hsv_image, ball_circles[i]);
-		double smallest = 2.0;
-		for (int ball = 0; ball < NUMBER_OF_BALLS; ball++)
-			smallest = min(smallest, compareHist(histogram, references[ball], HISTCMP_BHATTACHARYYA));
-		Scalar colour = (smallest > MAX_BALL_DISTANCE) ? Scalar(0, 0, 255) : Scalar(0, 255, 0);
+		double smallest = SmallestReferenceDistance(hsv_image, references, ball_circles[i]);
+		Scalar colour = (smallest >= max_ball_distance) ? Scalar(0, 0, 255) : Scalar(0, 255, 0);
 		circle(display, Point2f(ball_circles[i][0], ball_circles[i][1]), (int)ball_circles[i][2], colour, 2);
-		if (smallest > MAX_BALL_DISTANCE) {
+		if (smallest >= max_ball_distance) {
 			printf("%-8s rejected (%4.0f,%4.0f) distance %.3f\n", name.c_str(), detections[i].y, detections[i].x, smallest);
 			continue;
 		}
@@ -425,47 +471,61 @@ void RejectPockets(const Mat& image, const Mat& hsv_image, const vector<Mat>& re
 	detections = kept_detections;
 }
 
-vector<int> RecogniseByHistogram(const Mat& hsv_image, const vector<Mat>& references, const vector<Vec3f>& ball_circles, int metric){
-	bool larger_is_better = (metric == HISTCMP_CORREL || metric == HISTCMP_INTERSECT);
-	vector<int> labels;
+vector<vector<double>> HistogramCosts(const Mat& hsv_image, const vector<Mat>& references, const vector<Vec3f>& ball_circles, int metric){
+	double sign = (metric == HISTCMP_CORREL || metric == HISTCMP_INTERSECT) ? -1.0 : 1.0;
+	vector<vector<double>> costs;
 	for (size_t i = 0; i < ball_circles.size(); i++) {
 		Mat histogram = BallHistogram(hsv_image, ball_circles[i]);
-		int best_ball = 0;
-		double best_score = compareHist(histogram, references[0], metric);
-		for (int ball = 1; ball < NUMBER_OF_BALLS; ball++) {
-			double score = compareHist(histogram, references[ball], metric);
-			if (larger_is_better ? (score > best_score) : (score < best_score)) {
-				best_score = score;
-				best_ball = ball;
-			}
-		}
-		labels.push_back(best_ball);
+		vector<double> ball_costs;
+		for (int ball = 0; ball < NUMBER_OF_BALLS; ball++)
+			ball_costs.push_back(sign * compareHist(histogram, references[ball], metric));
+		costs.push_back(ball_costs);
 	}
-	return labels;
+	return costs;
 }
 
-vector<int> RecogniseByBackProjection(const Mat& hsv_image, const vector<Mat>& references, const vector<Vec3f>& ball_circles, const string& name){
+vector<vector<double>> BackProjectionCosts(const Mat& hsv_image, const vector<Mat>& references, const vector<Vec3f>& ball_circles, const string& name){
 	vector<Mat> probabilities(NUMBER_OF_BALLS);
 	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
 		Mat histogram;
 		normalize(references[ball], histogram, 0, 255, NORM_MINMAX);
 		calcBackProject(&hsv_image, 1, BALL_HISTOGRAM_CHANNELS, histogram, probabilities[ball], BALL_HISTOGRAM_RANGES);
 	}
-	Save("6_recognition", name + " back projection of ball 1", probabilities[1]);
-	vector<int> labels;
+	Save("6_recognition", name + " back projection of ball 7", probabilities[7]);
+	Save("6_recognition", name + " back projection of ball 15", probabilities[15]);
+	vector<vector<double>> costs;
 	for (size_t i = 0; i < ball_circles.size(); i++) {
 		Mat mask = BallMask(hsv_image, ball_circles[i]);
-		int best_ball = 0;
-		double best_score = -1;
-		for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
-			double score = mean(probabilities[ball], mask)[0];
-			if (score > best_score) {
-				best_score = score;
-				best_ball = ball;
+		vector<double> ball_costs;
+		for (int ball = 0; ball < NUMBER_OF_BALLS; ball++)
+			ball_costs.push_back(-mean(probabilities[ball], mask)[0]);
+		costs.push_back(ball_costs);
+	}
+	return costs;
+}
+
+vector<int> AssignNumbers(const vector<vector<double>>& costs, bool unique_numbers){
+	vector<int> labels(costs.size(), -1);
+	vector<bool> used(NUMBER_OF_BALLS, false);
+	for (size_t round = 0; round < costs.size(); round++) {
+		int best_detection = -1, best_ball = -1;
+		for (size_t detection = 0; detection < costs.size(); detection++) {
+			if (labels[detection] >= 0) continue;
+			for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
+				if (unique_numbers && used[ball]) continue;
+				if (best_detection < 0 || costs[detection][ball] < costs[best_detection][best_ball]) {
+					best_detection = (int)detection;
+					best_ball = ball;
+				}
 			}
 		}
-		labels.push_back(best_ball);
+		if (best_detection < 0) break;
+		labels[best_detection] = best_ball;
+		used[best_ball] = true;
 	}
+	for (size_t detection = 0; detection < costs.size(); detection++)
+		if (labels[detection] < 0)
+			labels[detection] = (int)(min_element(costs[detection].begin(), costs[detection].end()) - costs[detection].begin());
 	return labels;
 }
 
@@ -482,25 +542,21 @@ Mat BallPatch(const Mat& bordered_image, Point2f table_position, int margin){
 	return bordered_image(Rect((int)table_position.x + border - half_size, (int)table_position.y + border - half_size, 2 * half_size + 1, 2 * half_size + 1));
 }
 
-vector<int> RecogniseByTemplate(const Mat& bordered_image, const vector<Mat>& templates, const vector<Point2f>& detections, int matching_method){
-	vector<int> labels;
+vector<vector<double>> TemplateCosts(const Mat& bordered_image, const vector<Mat>& templates, const vector<Point2f>& detections, int matching_method){
+	vector<vector<double>> costs;
 	for (size_t i = 0; i < detections.size(); i++) {
 		Mat search_area = BallPatch(bordered_image, detections[i], TEMPLATE_SEARCH_MARGIN);
-		int best_ball = 0;
-		double best_score = -1;
+		vector<double> ball_costs;
 		for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
 			Mat correlation;
 			matchTemplate(search_area, templates[ball], correlation, matching_method);
 			double score;
 			minMaxLoc(correlation, 0, &score);
-			if (score > best_score) {
-				best_score = score;
-				best_ball = ball;
-			}
+			ball_costs.push_back(-score);
 		}
-		labels.push_back(best_ball);
+		costs.push_back(ball_costs);
 	}
-	return labels;
+	return costs;
 }
 
 Mat DrawRecognition(const Mat& table_image, const vector<Point2f>& detections, const vector<int>& ball_for_detection, const vector<int>& labels){
@@ -512,21 +568,6 @@ Mat DrawRecognition(const Mat& table_image, const vector<Point2f>& detections, c
 		putText(display, BALL_NAMES[labels[detection]], detections[detection] + Point2f(24, -8), FONT_HERSHEY_SIMPLEX, 0.8, colour, 2);
 	}
 	return display;
-}
-
-void PrintConfusionMatrix(const int confusion[NUMBER_OF_BALLS][NUMBER_OF_BALLS]){
-	cout << "Confusion matrix (rows = actual ball, columns = recognised ball):" << endl << "    ";
-	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++)
-		printf("%3s", BALL_NAMES[ball]);
-	printf("\n");
-	for (int actual = 0; actual < NUMBER_OF_BALLS; actual++) {
-		printf("%3s ", BALL_NAMES[actual]);
-		for (int recognised = 0; recognised < NUMBER_OF_BALLS; recognised++) {
-			if (confusion[actual][recognised]) printf("%3d", confusion[actual][recognised]);
-			else printf("%3s", ".");
-		}
-		printf("\n");
-	}
 }
 
 double WhiteFraction(const Mat& hsv_image, const Vec3f& ball_circle){
@@ -556,18 +597,17 @@ struct RecognitionResult {
 };
 
 void PrintRecognitionHeader(const string& first_column, const string& last_column){
-	printf("%-18s %6s %8s %8s %9s %9s  %s\n", first_column.c_str(), "Balls", "Located", "Correct", "Accuracy", "Overall", last_column.c_str());
+	printf("%-34s %6s %8s %8s %9s %9s  %s\n", first_column.c_str(), "Balls", "Located", "Correct", "Accuracy", "Overall", last_column.c_str());
 }
 
 void PrintRecognitionRow(const string& name, const RecognitionResult& r, const string& errors){
-	printf("%-18s %6d %8d %8d %9.3f %9.3f %s\n", name.c_str(), r.balls, r.located, r.correct,
+	printf("%-34s %6d %8d %8d %9.3f %9.3f %s\n", name.c_str(), r.balls, r.located, r.correct,
 		(double)r.correct / r.located, (double)r.correct / r.balls, errors.c_str());
 }
 
-RecognitionResult EvaluateRecognition(const string& title, const Mat table_images[], const vector<Point2f> detections[], const vector<int> labels[], bool show_confusion){
+RecognitionResult EvaluateRecognition(const string& title, const Mat table_images[], const vector<Point2f> detections[], const vector<int> labels[]){
 	cout << endl << title << " recognition:" << endl;
 	PrintRecognitionHeader("Image", "Errors (actual->recognised)");
-	int confusion[NUMBER_OF_BALLS][NUMBER_OF_BALLS] = {};
 	RecognitionResult total;
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++) {
 		vector<int> ball_for_detection;
@@ -578,7 +618,6 @@ RecognitionResult EvaluateRecognition(const string& title, const Mat table_image
 		for (size_t detection = 0; detection < detections[i].size(); detection++) {
 			int actual = ball_for_detection[detection];
 			if (actual < 0) continue;
-			confusion[actual][labels[i][detection]]++;
 			if (labels[i][detection] == actual) correct++;
 			else errors += string(" ") + BALL_NAMES[actual] + "->" + BALL_NAMES[labels[i][detection]];
 		}
@@ -593,8 +632,25 @@ RecognitionResult EvaluateRecognition(const string& title, const Mat table_image
 		total.correct += result.correct;
 	}
 	PrintRecognitionRow("All", total, "");
-	if (show_confusion) PrintConfusionMatrix(confusion);
 	return total;
+}
+
+void EvaluateWithAndWithoutUniqueNumbers(const string& title, const vector<vector<double>> costs[], const Mat table_images[], const vector<Point2f> detections[], RecognitionResult results[2]){
+	vector<int> labels[NUMBER_OF_IMAGES];
+	for (int unique_numbers = 0; unique_numbers < 2; unique_numbers++) {
+		for (int i = 1; i < NUMBER_OF_IMAGES; i++)
+			labels[i] = AssignNumbers(costs[i], unique_numbers == 1);
+		results[unique_numbers] = EvaluateRecognition(unique_numbers ? title : title + " without unique numbers", table_images, detections, labels);
+	}
+}
+
+void PrintComparison(const string& title, const char* const names[], const RecognitionResult results[][2], int count){
+	cout << endl << title << endl;
+	PrintRecognitionHeader("", "");
+	for (int i = 0; i < count; i++) {
+		PrintRecognitionRow(string(names[i]) + " without unique", results[i][0], "");
+		PrintRecognitionRow(string(names[i]) + " with unique", results[i][1], "");
+	}
 }
 
 }
@@ -641,9 +697,16 @@ void MyApplication(){
 	totals[1] = EvaluateMethod("Background subtraction", "2_background", table_images, detections);
 
 	cout << endl << "Method 3: Hough circles" << endl;
-	vector<Vec3f> hough_circles[NUMBER_OF_IMAGES];
+	Mat hsv_images[NUMBER_OF_IMAGES];
 	for (int i = 0; i < NUMBER_OF_IMAGES; i++)
-		detections[i] = LocateByHough(images[i], homography, IMAGE_NAMES[i], hough_circles[i]);
+		cvtColor(images[i], hsv_images[i], COLOR_BGR2HSV);
+	double max_ball_distance;
+	double accumulator_threshold = TrainOnAllBalls(images[0], hsv_images[0], homography, max_ball_distance);
+	vector<Vec3f> hough_circles[NUMBER_OF_IMAGES];
+	for (int i = 0; i < NUMBER_OF_IMAGES; i++) {
+		detections[i] = LocateByHough(images[i], homography, accumulator_threshold, hough_circles[i]);
+		SaveHoughStages(images[i], hough_circles[i], IMAGE_NAMES[i]);
+	}
 	vector<Point2f> hough_detections[NUMBER_OF_IMAGES];
 	for (int i = 0; i < NUMBER_OF_IMAGES; i++)
 		hough_detections[i] = detections[i];
@@ -666,30 +729,40 @@ void MyApplication(){
 		PrintLocationRow(method_names[method], totals[method]);
 
 	cout << endl << "Recognition: rejecting the circles unlike every reference ball" << endl;
-	Mat hsv_images[NUMBER_OF_IMAGES];
-	for (int i = 0; i < NUMBER_OF_IMAGES; i++)
-		cvtColor(images[i], hsv_images[i], COLOR_BGR2HSV);
 	vector<Vec3f> reference_circles;
-	vector<Mat> references = ReferenceHistograms(images[0], hsv_images[0], homography, hough_circles[0], reference_circles);
+	vector<Mat> references = ReferenceHistograms(hsv_images[0], homography, hough_circles[0], reference_circles);
+	cout << "Reference ball radius: " << reference_circles[0][2] << " pixels" << endl;
+	Mat reference_discs = images[0].clone();
+	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
+		Point2f centre(reference_circles[ball][0], reference_circles[ball][1]);
+		circle(reference_discs, centre, (int)reference_circles[ball][2], Scalar(0, 255, 255), 2);
+		putText(reference_discs, BALL_NAMES[ball], centre + Point2f(-10, -reference_circles[ball][2] - 4), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 255, 255), 2);
+	}
+	Save("6_recognition", "AllBalls reference discs", reference_discs);
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
-		RejectPockets(images[i], hsv_images[i], references, hough_circles[i], hough_detections[i], IMAGE_NAMES[i]);
+		RejectPockets(images[i], hsv_images[i], references, max_ball_distance, hough_circles[i], hough_detections[i], IMAGE_NAMES[i]);
 	EvaluateMethod("Hough circles after rejection", "6_recognition", table_images, hough_detections);
 
 	const char* metric_names[4] = { "Bhattacharyya", "Correlation", "Intersection", "Chi-square" };
 	const int metrics[4] = { HISTCMP_BHATTACHARYYA, HISTCMP_CORREL, HISTCMP_INTERSECT, HISTCMP_CHISQR };
-	vector<int> labels[NUMBER_OF_IMAGES];
-	RecognitionResult metric_totals[4], recognition_totals[3];
+	vector<vector<double>> costs[NUMBER_OF_IMAGES];
+	RecognitionResult metric_results[4][2], method_results[3][2];
 	for (int metric = 0; metric < 4; metric++) {
 		for (int i = 1; i < NUMBER_OF_IMAGES; i++)
-			labels[i] = RecogniseByHistogram(hsv_images[i], references, hough_circles[i], metrics[metric]);
-		metric_totals[metric] = EvaluateRecognition(metric_names[metric], table_images, hough_detections, labels, metric == 0);
-		if (metric == 0) PrintWhiteFractions(hsv_images, hough_circles, hough_detections, labels, reference_circles);
+			costs[i] = HistogramCosts(hsv_images[i], references, hough_circles[i], metrics[metric]);
+		EvaluateWithAndWithoutUniqueNumbers(metric_names[metric], costs, table_images, hough_detections, metric_results[metric]);
+		if (metric > 0) continue;
+		vector<int> labels[NUMBER_OF_IMAGES];
+		for (int i = 1; i < NUMBER_OF_IMAGES; i++)
+			labels[i] = AssignNumbers(costs[i], false);
+		PrintWhiteFractions(hsv_images, hough_circles, hough_detections, labels, reference_circles);
 	}
-	recognition_totals[0] = metric_totals[0];
+	method_results[0][0] = metric_results[0][0];
+	method_results[0][1] = metric_results[0][1];
 
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
-		labels[i] = RecogniseByBackProjection(hsv_images[i], references, hough_circles[i], IMAGE_NAMES[i]);
-	recognition_totals[1] = EvaluateRecognition("Back projection", table_images, hough_detections, labels, true);
+		costs[i] = BackProjectionCosts(hsv_images[i], references, hough_circles[i], IMAGE_NAMES[i]);
+	EvaluateWithAndWithoutUniqueNumbers("Back projection", costs, table_images, hough_detections, method_results[1]);
 
 	Mat bordered_training = AddTemplateBorder(table_images[0]);
 	vector<Mat> templates;
@@ -701,20 +774,14 @@ void MyApplication(){
 	vconcat(top_row, bottom_row, all_templates);
 	Save("6_recognition", "AllBalls templates", all_templates);
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
-		labels[i] = RecogniseByTemplate(AddTemplateBorder(table_images[i]), templates, hough_detections[i], TM_CCORR_NORMED);
-	recognition_totals[2] = EvaluateRecognition("Template matching", table_images, hough_detections, labels, true);
+		costs[i] = TemplateCosts(AddTemplateBorder(table_images[i]), templates, hough_detections[i], TM_CCORR_NORMED);
+	EvaluateWithAndWithoutUniqueNumbers("Template matching", costs, table_images, hough_detections, method_results[2]);
+	vector<int> labels[NUMBER_OF_IMAGES];
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
-		labels[i] = RecogniseByTemplate(AddTemplateBorder(table_images[i]), templates, hough_detections[i], TM_CCOEFF_NORMED);
-	EvaluateRecognition("Template matching zero mean", table_images, hough_detections, labels, true);
+		labels[i] = AssignNumbers(TemplateCosts(AddTemplateBorder(table_images[i]), templates, hough_detections[i], TM_CCOEFF_NORMED), false);
+	EvaluateRecognition("Template matching zero mean without unique numbers", table_images, hough_detections, labels);
 
-	cout << endl << "Comparison of the histogram metrics (Table1 to Table6):" << endl;
-	PrintRecognitionHeader("Metric", "");
-	for (int metric = 0; metric < 4; metric++)
-		PrintRecognitionRow(metric_names[metric], metric_totals[metric], "");
-
+	PrintComparison("Comparison of the histogram metrics (Table1 to Table6):", metric_names, metric_results, 4);
 	const char* recognition_names[3] = { "Histogram", "Back projection", "Template matching" };
-	cout << endl << "Comparison of the recognition methods, with the Bhattacharyya histogram metric (Table1 to Table6):" << endl;
-	PrintRecognitionHeader("Method", "");
-	for (int method = 0; method < 3; method++)
-		PrintRecognitionRow(recognition_names[method], recognition_totals[method], "");
+	PrintComparison("Comparison of the recognition methods, with the Bhattacharyya histogram metric (Table1 to Table6):", recognition_names, method_results, 3);
 }
