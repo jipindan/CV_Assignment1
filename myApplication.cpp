@@ -3,6 +3,7 @@
 
 namespace {
 
+// AllBalls trains, Table1-6 test
 const int NUMBER_OF_IMAGES = 7;
 const char* FILE_LOCATION = "Media/Pool/";
 const char* RESULTS_LOCATION = "Results/";
@@ -12,12 +13,15 @@ const int NUMBER_OF_BALLS = 16;
 const char* BALL_NAMES[NUMBER_OF_BALLS] = {
 	"W", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15" };
 
+// 1 pixel = 1 mm
 const int TABLE_COLS = 1434;
 const int TABLE_ROWS = 683;
 const double BALL_RADIUS = 21.5;
 
+// Table corners (x, y)
 const Point2f TABLE_CORNERS[4] = { Point2f(337, 35), Point2f(1570, 21), Point2f(1888, 451), Point2f(38, 472) };
 
+// Ground truth (row, column), -1 = off the table
 const int GROUND_TRUTH[NUMBER_OF_IMAGES][NUMBER_OF_BALLS][2] = {
 	{ {293,797}, {253,908}, {250,959}, {255,1013}, {256,1072}, {254,1132}, {262,1184}, {256,1244}, {253,1307}, {329,901}, {330,961}, {335,1013}, {336,1067}, {334,1130}, {345,1187}, {342,1245} },
 	{ {288,29}, {309,1092}, {429,1212}, {383,1131}, {335,1050}, {285,1211}, {261,1170}, {352,1173}, {331,1132}, {240,1210}, {310,1170}, {407,1169}, {281,1135}, {374,1212}, {360,1091}, {331,1213} },
@@ -27,13 +31,17 @@ const int GROUND_TRUTH[NUMBER_OF_IMAGES][NUMBER_OF_BALLS][2] = {
 	{ {608,26}, {535,23}, {546,1407}, {444,1204}, {-1,-1}, {305,1406}, {131,25}, {260,1294}, {226,1252}, {538,72}, {171,1270}, {665,798}, {249,351}, {-1,-1}, {169,901}, {399,1201} },
 	{ {629,947}, {535,23}, {477,1364}, {444,1204}, {-1,-1}, {305,1406}, {131,25}, {260,1294}, {226,1252}, {538,72}, {171,1270}, {-1,-1}, {249,351}, {-1,-1}, {169,901}, {399,1201} } };
 
+// About a quarter of a ball
 const int MINIMUM_BALL_AREA = 400;
 
+// Cloth histogram bins
 const int HUE_BINS = 18;
 const int SATURATION_BINS = 16;
 
+// Background difference threshold
 const int DIFFERENCE_THRESHOLD = 30;
 
+// Hough, accumulator threshold tried from first to last
 const int HOUGH_SMOOTHING_SIZE = 5;
 const double HOUGH_MIN_CENTRE_DISTANCE = 30;
 const double HOUGH_CANNY_THRESHOLD = 100;
@@ -42,23 +50,28 @@ const int HOUGH_LAST_ACCUMULATOR_THRESHOLD = 40;
 const int HOUGH_MIN_RADIUS = 17;
 const int HOUGH_MAX_RADIUS = 31;
 
+// k-means clusters
 const int KMEANS_CLUSTERS = 4;
 
+// Watershed
 const int WATERSHED_SMOOTHING_SIZE = 7;
 const double WATERSHED_CANNY_LOW = 100;
 const double WATERSHED_CANNY_HIGH = 200;
 const double WATERSHED_MARKER_DISTANCE = 2.0;
 const int WATERSHED_MAX_AREA = 3000;
 
+// Ball histogram, HSV 12 x 4 x 4
 const int BALL_HISTOGRAM_CHANNELS[3] = { 0, 1, 2 };
 const int BALL_HISTOGRAM_SIZES[3] = { 12, 4, 4 };
 const float BALL_HUE_RANGE[2] = { 0, 180 };
 const float BALL_SATURATION_RANGE[2] = { 0, 256 };
 const float BALL_VALUE_RANGE[2] = { 0, 256 };
 const float* BALL_HISTOGRAM_RANGES[3] = { BALL_HUE_RANGE, BALL_SATURATION_RANGE, BALL_VALUE_RANGE };
+// White pixel, failure analysis only
 const int WHITE_MAX_SATURATION = 59;
 const int WHITE_MIN_VALUE = 151;
 
+// Save into Results
 void Save(const string& folder, const string& name, const Mat& image){
 	string directory = string(RESULTS_LOCATION) + folder;
 	utils::fs::createDirectories(directory);
@@ -66,14 +79,17 @@ void Save(const string& folder, const string& name, const Mat& image){
 	imwrite(directory + "/" + name + extension, image);
 }
 
+// Ball on this table
 bool BallOnTable(int image_index, int ball){
 	return GROUND_TRUTH[image_index][ball][0] >= 0;
 }
 
+// Ground truth as (x, y)
 Point2f GroundTruthPosition(int image_index, int ball){
 	return Point2f((float)GROUND_TRUTH[image_index][ball][1], (float)GROUND_TRUTH[image_index][ball][0]);
 }
 
+// Draw the ground truth
 Mat DrawGroundTruth(const Mat& table_image, int image_index){
 	Mat display = table_image.clone();
 	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
@@ -85,6 +101,7 @@ Mat DrawGroundTruth(const Mat& table_image, int image_index){
 	return display;
 }
 
+// Closing then opening
 Mat CloseAndOpen(const Mat& binary, int element_size, const string& folder, const string& name){
 	Mat element(element_size, element_size, CV_8U, Scalar(1));
 	Mat cleaned;
@@ -94,6 +111,7 @@ Mat CloseAndOpen(const Mat& binary, int element_size, const string& folder, cons
 	return cleaned;
 }
 
+// Region centres, holes and small regions ignored
 vector<Point2f> RegionCentres(const Mat& binary, const string& name){
 	vector<vector<Point>> contours;
 	vector<Vec4i> hierarchy;
@@ -111,6 +129,7 @@ vector<Point2f> RegionCentres(const Mat& binary, const string& name){
 	return centres;
 }
 
+// Method 1: cloth histogram from AllBalls without the balls
 MatND TableHistogram(const Mat& table_image){
 	Mat hls_image;
 	cvtColor(table_image, hls_image, COLOR_BGR2HLS);
@@ -131,6 +150,7 @@ MatND TableHistogram(const Mat& table_image){
 	return histogram;
 }
 
+// Back projection, Otsu, white = not cloth
 Mat BackProjectionMask(const Mat& table_image, const MatND& histogram, const string& name){
 	Mat hls_image;
 	cvtColor(table_image, hls_image, COLOR_BGR2HLS);
@@ -149,6 +169,7 @@ Mat BackProjectionMask(const Mat& table_image, const MatND& histogram, const str
 	return CloseAndOpen(binary, 5, "1_backprojection", name);
 }
 
+// Method 2: difference from AllBalls
 Mat BackgroundMask(const Mat& table_image, const Mat& background, const string& name){
 	Mat difference;
 	absdiff(table_image, background, difference);
@@ -160,6 +181,7 @@ Mat BackgroundMask(const Mat& table_image, const Mat& background, const string& 
 	return CloseAndOpen(binary, 3, "2_background", name);
 }
 
+// Original image to table, off-table points dropped
 vector<Point2f> PointsOnTable(const vector<Point2f>& image_points, const Mat& homography){
 	vector<Point2f> table_points, on_table;
 	if (!image_points.empty()) perspectiveTransform(image_points, table_points, homography);
@@ -169,6 +191,7 @@ vector<Point2f> PointsOnTable(const vector<Point2f>& image_points, const Mat& ho
 	return on_table;
 }
 
+// Grey with Gaussian smoothing
 Mat SmoothedGrey(const Mat& image){
 	Mat grey;
 	cvtColor(image, grey, COLOR_BGR2GRAY);
@@ -176,6 +199,7 @@ Mat SmoothedGrey(const Mat& image){
 	return grey;
 }
 
+// Method 3: Hough circles, centres in table coordinates
 vector<Point2f> LocateByHough(const Mat& image, const Mat& homography, double accumulator_threshold, vector<Vec3f>& circles_on_table){
 	vector<Vec3f> circles;
 	HoughCircles(SmoothedGrey(image), circles, HOUGH_GRADIENT, 1, HOUGH_MIN_CENTRE_DISTANCE, HOUGH_CANNY_THRESHOLD,
@@ -191,6 +215,7 @@ vector<Point2f> LocateByHough(const Mat& image, const Mat& homography, double ac
 	return detections;
 }
 
+// Save the Hough stages
 void SaveHoughStages(const Mat& image, const vector<Vec3f>& circles_on_table, const string& name){
 	Mat edges;
 	Canny(SmoothedGrey(image), edges, HOUGH_CANNY_THRESHOLD / 2, HOUGH_CANNY_THRESHOLD);
@@ -202,6 +227,7 @@ void SaveHoughStages(const Mat& image, const vector<Vec3f>& circles_on_table, co
 	printf("%-8s %3d circles on the table\n", name.c_str(), (int)circles_on_table.size());
 }
 
+// Method 4: k-means, largest cluster = cloth
 Mat KMeansMask(const Mat& table_image, const string& name){
 	Mat samples = table_image.reshape(1, table_image.rows * table_image.cols);
 	samples.convertTo(samples, CV_32F);
@@ -234,6 +260,7 @@ Mat KMeansMask(const Mat& table_image, const string& name){
 	return CloseAndOpen(binary, 5, "4_kmeans", name);
 }
 
+// Method 5: watershed on the chamfer distance
 vector<Point2f> LocateByWatershed(const Mat& image, const Mat& homography, const string& name){
 	Mat grey;
 	cvtColor(image, grey, COLOR_BGR2GRAY);
@@ -287,11 +314,13 @@ vector<Point2f> LocateByWatershed(const Mat& image, const Mat& homography, const
 	return detections;
 }
 
+// Location counts
 struct LocationResult {
 	int balls = 0, true_positives = 0, false_positives = 0, false_negatives = 0;
 	double total_error = 0, max_error = 0;
 };
 
+// Nearest unmatched detection within one radius = TP
 LocationResult EvaluateLocations(int image_index, const vector<Point2f>& detections, vector<int>& ball_for_detection, vector<bool>& ball_found){
 	LocationResult result;
 	ball_for_detection.assign(detections.size(), -1);
@@ -321,6 +350,7 @@ LocationResult EvaluateLocations(int image_index, const vector<Point2f>& detecti
 	return result;
 }
 
+// Precision, recall, F1, errors
 void PrintLocationRow(const string& name, const LocationResult& r){
 	double precision = (r.true_positives + r.false_positives) ? (double)r.true_positives / (r.true_positives + r.false_positives) : 0.0;
 	double recall = r.balls ? (double)r.true_positives / r.balls : 0.0;
@@ -330,6 +360,7 @@ void PrintLocationRow(const string& name, const LocationResult& r){
 		r.false_positives, r.false_negatives, precision, recall, f1, mean_error, r.max_error);
 }
 
+// Green found, red false, blue missed
 Mat DrawLocations(const Mat& table_image, int image_index, const vector<Point2f>& detections,
 	const vector<int>& ball_for_detection, const vector<bool>& ball_found){
 	Mat display = table_image.clone();
@@ -350,6 +381,7 @@ void PrintLocationHeader(const string& first_column){
 	printf("%-10s %6s %4s %4s %4s %10s %8s %6s %9s %9s\n", first_column.c_str(), "Balls", "TP", "FP", "FN", "Precision", "Recall", "F1", "MeanErr", "MaxErr");
 }
 
+// Evaluate one location method
 LocationResult EvaluateMethod(const string& title, const string& folder, const Mat table_images[], const vector<Point2f> detections[]){
 	cout << endl << title << " results:" << endl;
 	PrintLocationHeader("Image");
@@ -371,12 +403,14 @@ LocationResult EvaluateMethod(const string& title, const string& folder, const M
 	return total;
 }
 
+// Disc mask
 Mat BallMask(const Mat& image, const Vec3f& ball_circle){
 	Mat mask(image.size(), CV_8U, Scalar(0));
 	circle(mask, Point2f(ball_circle[0], ball_circle[1]), (int)ball_circle[2], Scalar(255), FILLED);
 	return mask;
 }
 
+// HSV histogram in a disc
 Mat BallHistogram(const Mat& hsv_image, const Vec3f& ball_circle){
 	Mat histogram;
 	calcHist(&hsv_image, 1, BALL_HISTOGRAM_CHANNELS, BallMask(hsv_image, ball_circle), histogram, 3, BALL_HISTOGRAM_SIZES, BALL_HISTOGRAM_RANGES);
@@ -384,6 +418,7 @@ Mat BallHistogram(const Mat& hsv_image, const Vec3f& ball_circle){
 	return histogram;
 }
 
+// 16 reference histograms from AllBalls
 vector<Mat> ReferenceHistograms(const Mat& hsv_image, const Mat& homography, const vector<Vec3f>& training_circles, vector<Vec3f>& reference_circles){
 	vector<float> radii;
 	for (size_t i = 0; i < training_circles.size(); i++)
@@ -402,6 +437,7 @@ vector<Mat> ReferenceHistograms(const Mat& hsv_image, const Mat& homography, con
 	return references;
 }
 
+// Smallest Bhattacharyya distance to the references
 double SmallestReferenceDistance(const Mat& hsv_image, const vector<Mat>& references, const Vec3f& ball_circle){
 	Mat histogram = BallHistogram(hsv_image, ball_circle);
 	double smallest = 2.0;
@@ -410,6 +446,7 @@ double SmallestReferenceDistance(const Mat& hsv_image, const vector<Mat>& refere
 	return smallest;
 }
 
+// Choose both thresholds on AllBalls
 double TrainOnAllBalls(const Mat& image, const Mat& hsv_image, const Mat& homography, double& max_ball_distance){
 	cout << "Training on AllBalls:" << endl;
 	printf("%-10s %4s %4s %4s %9s %9s %14s %14s\n", "Threshold", "TP", "FP", "FN", "MeanErr", "MaxErr", "BallDistance", "OtherDistance");
@@ -449,6 +486,7 @@ double TrainOnAllBalls(const Mat& image, const Mat& hsv_image, const Mat& homogr
 	return best_thresholds[middle];
 }
 
+// Reject pockets
 void RejectPockets(const Mat& image, const Mat& hsv_image, const vector<Mat>& references, double max_ball_distance, vector<Vec3f>& ball_circles, vector<Point2f>& detections, const string& name){
 	vector<Vec3f> kept_circles;
 	vector<Point2f> kept_detections;
@@ -469,6 +507,7 @@ void RejectPockets(const Mat& image, const Mat& hsv_image, const vector<Mat>& re
 	detections = kept_detections;
 }
 
+// Histogram comparison costs
 vector<vector<double>> HistogramCosts(const Mat& hsv_image, const vector<Mat>& references, const vector<Vec3f>& ball_circles, int metric){
 	double sign = (metric == HISTCMP_CORREL || metric == HISTCMP_INTERSECT) ? -1.0 : 1.0;
 	vector<vector<double>> costs;
@@ -482,6 +521,7 @@ vector<vector<double>> HistogramCosts(const Mat& hsv_image, const vector<Mat>& r
 	return costs;
 }
 
+// Back projection costs
 vector<vector<double>> BackProjectionCosts(const Mat& hsv_image, const vector<Mat>& references, const vector<Vec3f>& ball_circles, const string& name){
 	vector<Mat> probabilities(NUMBER_OF_BALLS);
 	for (int ball = 0; ball < NUMBER_OF_BALLS; ball++) {
@@ -502,6 +542,7 @@ vector<vector<double>> BackProjectionCosts(const Mat& hsv_image, const vector<Ma
 	return costs;
 }
 
+// Assign numbers, optionally each number once
 vector<int> AssignNumbers(const vector<vector<double>>& costs, bool unique_numbers){
 	vector<int> labels(costs.size(), -1);
 	vector<bool> used(NUMBER_OF_BALLS, false);
@@ -527,6 +568,7 @@ vector<int> AssignNumbers(const vector<vector<double>>& costs, bool unique_numbe
 	return labels;
 }
 
+// Green correct, red wrong, orange not a ball
 Mat DrawRecognition(const Mat& table_image, const vector<Point2f>& detections, const vector<int>& ball_for_detection, const vector<int>& labels){
 	Mat display = table_image.clone();
 	for (size_t detection = 0; detection < detections.size(); detection++) {
@@ -538,12 +580,14 @@ Mat DrawRecognition(const Mat& table_image, const vector<Point2f>& detections, c
 	return display;
 }
 
+// White fraction in a disc
 double WhiteFraction(const Mat& hsv_image, const Vec3f& ball_circle){
 	Mat mask = BallMask(hsv_image, ball_circle), white;
 	inRange(hsv_image, Scalar(0, 0, WHITE_MIN_VALUE), Scalar(180, WHITE_MAX_SATURATION, 255), white);
 	return (double)countNonZero(white & mask) / countNonZero(mask);
 }
 
+// White fractions of the errors
 void PrintWhiteFractions(const Mat hsv_images[], const vector<Vec3f> ball_circles[], const vector<Point2f> detections[], const vector<int> labels[], const vector<Vec3f>& reference_circles){
 	cout << endl << "White fraction of the balls recognised wrongly:" << endl;
 	printf("%-8s %8s %8s %16s %20s\n", "Image", "Error", "Ball", "Actual reference", "Recognised reference");
@@ -560,6 +604,7 @@ void PrintWhiteFractions(const Mat hsv_images[], const vector<Vec3f> ball_circle
 	}
 }
 
+// Recognition counts
 struct RecognitionResult {
 	int balls = 0, located = 0, correct = 0;
 };
@@ -573,6 +618,7 @@ void PrintRecognitionRow(const string& name, const RecognitionResult& r, const s
 		(double)r.correct / r.located, (double)r.correct / r.balls, errors.c_str());
 }
 
+// Evaluate recognition
 RecognitionResult EvaluateRecognition(const string& title, const Mat table_images[], const vector<Point2f> detections[], const vector<int> labels[]){
 	cout << endl << title << " recognition:" << endl;
 	PrintRecognitionHeader("Image", "Errors (actual->recognised)");
@@ -603,6 +649,7 @@ RecognitionResult EvaluateRecognition(const string& title, const Mat table_image
 	return total;
 }
 
+// Without and with unique numbers
 void EvaluateWithAndWithoutUniqueNumbers(const string& title, const vector<vector<double>> costs[], const Mat table_images[], const vector<Point2f> detections[], RecognitionResult results[2]){
 	vector<int> labels[NUMBER_OF_IMAGES];
 	for (int unique_numbers = 0; unique_numbers < 2; unique_numbers++) {
@@ -612,6 +659,7 @@ void EvaluateWithAndWithoutUniqueNumbers(const string& title, const vector<vecto
 	}
 }
 
+// Recognition totals
 void PrintComparison(const string& title, const char* const names[], const RecognitionResult results[][2], int count){
 	cout << endl << title << endl;
 	PrintRecognitionHeader("", "");
@@ -624,6 +672,10 @@ void PrintComparison(const string& title, const char* const names[], const Recog
 }
 
 void MyApplication(){
+	// Same k-means result on every run
+	theRNG() = RNG();
+
+	// Load images
 	Mat images[NUMBER_OF_IMAGES];
 	for (int i = 0; i < NUMBER_OF_IMAGES; i++) {
 		string filename = string(FILE_LOCATION) + IMAGE_NAMES[i] + ".jpeg";
@@ -635,6 +687,7 @@ void MyApplication(){
 		cout << IMAGE_NAMES[i] << ": " << images[i].cols << " x " << images[i].rows << " pixels" << endl;
 	}
 
+	// Rectify
 	Mat corners_image = images[0].clone();
 	for (int corner = 0; corner < 4; corner++)
 		line(corners_image, TABLE_CORNERS[corner], TABLE_CORNERS[(corner + 1) % 4], Scalar(0, 0, 255), 2);
@@ -650,6 +703,7 @@ void MyApplication(){
 		Save("0_data", string(IMAGE_NAMES[i]) + " ground truth", DrawGroundTruth(table_images[i], i));
 	}
 
+	// Stage 1: location
 	vector<Point2f> detections[NUMBER_OF_IMAGES];
 	LocationResult totals[5];
 
@@ -690,6 +744,7 @@ void MyApplication(){
 		detections[i] = LocateByWatershed(images[i], homography, IMAGE_NAMES[i]);
 	totals[4] = EvaluateMethod("Watershed", "5_watershed", table_images, detections);
 
+	// Compare location methods
 	const char* method_names[5] = { "Back proj", "Background", "Hough", "k-means", "Watershed" };
 	cout << endl << "Comparison of the location methods (Table1 to Table6):" << endl;
 	PrintLocationHeader("Method");
@@ -697,6 +752,7 @@ void MyApplication(){
 		PrintLocationRow(method_names[method], totals[method]);
 
 	cout << endl << "Recognition: rejecting the circles unlike every reference ball" << endl;
+	// Stage 2: recognition
 	vector<Vec3f> reference_circles;
 	vector<Mat> references = ReferenceHistograms(hsv_images[0], homography, hough_circles[0], reference_circles);
 	cout << "Reference ball radius: " << reference_circles[0][2] << " pixels" << endl;
@@ -711,6 +767,7 @@ void MyApplication(){
 		RejectPockets(images[i], hsv_images[i], references, max_ball_distance, hough_circles[i], hough_detections[i], IMAGE_NAMES[i]);
 	EvaluateMethod("Hough circles after rejection", "6_recognition", table_images, hough_detections);
 
+	// Histogram metrics
 	const char* metric_names[4] = { "Bhattacharyya", "Correlation", "Intersection", "Chi-square" };
 	const int metrics[4] = { HISTCMP_BHATTACHARYYA, HISTCMP_CORREL, HISTCMP_INTERSECT, HISTCMP_CHISQR };
 	vector<vector<double>> costs[NUMBER_OF_IMAGES];
@@ -728,10 +785,12 @@ void MyApplication(){
 	method_results[0][0] = metric_results[0][0];
 	method_results[0][1] = metric_results[0][1];
 
+	// Back projection
 	for (int i = 1; i < NUMBER_OF_IMAGES; i++)
 		costs[i] = BackProjectionCosts(hsv_images[i], references, hough_circles[i], IMAGE_NAMES[i]);
 	EvaluateWithAndWithoutUniqueNumbers("Back projection", costs, table_images, hough_detections, method_results[1]);
 
+	// Compare recognition methods
 	PrintComparison("Comparison of the histogram metrics (Table1 to Table6):", metric_names, metric_results, 4);
 	const char* recognition_names[2] = { "Histogram", "Back projection" };
 	PrintComparison("Comparison of the recognition methods, with the Bhattacharyya histogram metric (Table1 to Table6):", recognition_names, method_results, 2);
