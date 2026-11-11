@@ -8,8 +8,8 @@ Table6: 1931 x 509 pixels
 
 Perspective transformation:
 [1.22626512512447, 0.8390235066641109, -442.6171699001902;
- 0.02805259519075561, 2.470632133585815, -95.92584925478816;
- 1.372576279739869e-05, 0.001208194988401226, 1]
+ 0.02805259519075562, 2.470632133585815, -95.92584925478815;
+ 1.372576279739871e-05, 0.001208194988401226, 1]
 
 Method 1: back projection
 Cloth sample: 904030 pixels
@@ -60,14 +60,14 @@ Threshold    TP   FP   FN   MeanErr    MaxErr   BallDistance  OtherDistance
 5            16   66    0       3.8      18.1          0.432          0.335
 6            16   45    0       2.9      11.6          0.396          0.375
 7            15   33    1       2.3       5.6          0.296          0.405
-8            15   26    1       2.3       5.6          0.215          0.642
-9            15   16    1       2.3       5.6          0.215          0.642
-10           15   10    1       2.3       5.6          0.215          0.642
-11           15    7    1       2.3       5.6          0.215          0.642
-12           15    5    1       2.3       5.6          0.215          0.677
+8            15   26    1       2.3       5.6          0.216          0.642
+9            15   16    1       2.3       5.6          0.216          0.642
+10           15   10    1       2.3       5.6          0.216          0.642
+11           15    7    1       2.3       5.6          0.216          0.642
+12           15    5    1       2.3       5.6          0.216          0.677
 13           15    2    1       2.3       5.6          0.194          0.670
-14           15    2    1       2.3       5.6          0.194          0.656
-15           15    2    1       2.3       5.6          0.194          0.656
+14           15    2    1       2.3       5.6          0.194          0.657
+15           15    2    1       2.3       5.6          0.194          0.657
 16           15    2    1       2.3       5.6          0.194          0.637
 17           15    2    1       2.3       5.6          0.194          0.637
 18           15    2    1       2.3       5.6          0.194          0.638
@@ -76,18 +76,18 @@ Threshold    TP   FP   FN   MeanErr    MaxErr   BallDistance  OtherDistance
 21           15    1    1       2.3       5.6          0.194          0.638
 22           15    1    1       2.3       5.6          0.194          0.638
 23           15    1    1       2.3       5.6          0.194          0.638
-24           15    1    1       2.6       5.6          0.215          0.638
-25           15    0    1       2.6       5.6          0.215           none
-26           15    0    1       2.6       5.6          0.215           none
-27           15    0    1       2.5       5.6          0.215           none
-28           15    0    1       2.6       5.6          0.215           none
-29           14    0    2       2.6       5.6          0.215           none
-30           14    0    2       2.7       5.6          0.215           none
-31           14    0    2       2.7       5.6          0.215           none
-32           13    0    3       2.8       5.6          0.215           none
-33           12    0    4       2.9       5.7          0.215           none
-34           12    0    4       2.8       5.7          0.215           none
-35           12    0    4       2.8       5.7          0.215           none
+24           15    1    1       2.6       5.6          0.216          0.638
+25           15    0    1       2.6       5.6          0.216           none
+26           15    0    1       2.6       5.6          0.216           none
+27           15    0    1       2.5       5.6          0.216           none
+28           15    0    1       2.6       5.6          0.216           none
+29           14    0    2       2.6       5.6          0.216           none
+30           14    0    2       2.7       5.6          0.216           none
+31           14    0    2       2.7       5.6          0.216           none
+32           13    0    3       2.8       5.6          0.216           none
+33           12    0    4       2.9       5.7          0.216           none
+34           12    0    4       2.8       5.7          0.216           none
+35           12    0    4       2.8       5.7          0.216           none
 36           12    0    4       2.7       5.7          0.194           none
 37           11    0    5       2.5       5.7          0.194           none
 38           10    0    6       2.1       4.7          0.194           none
@@ -138,22 +138,22 @@ Table6         13    1    2   12      0.333    0.077  0.125      19.8      19.8
 All            90   15   18   75      0.455    0.167  0.244       7.1      19.8
 
 Method 5: watershed
-Table1     743 markers,  81 ball sized,  51 on the table
-Table2     959 markers, 138 ball sized,  96 on the table
-Table3     941 markers, 113 ball sized,  75 on the table
-Table4     949 markers, 129 ball sized,  93 on the table
+Table1     744 markers,  82 ball sized,  51 on the table
+Table2     957 markers, 137 ball sized,  94 on the table
+Table3     941 markers, 112 ball sized,  74 on the table
+Table4     950 markers, 128 ball sized,  92 on the table
 Table5     823 markers, 122 ball sized,  85 on the table
-Table6     874 markers,  88 ball sized,  57 on the table
+Table6     872 markers,  84 ball sized,  54 on the table
 
 Watershed results:
 Image       Balls   TP   FP   FN  Precision   Recall     F1   MeanErr    MaxErr
 Table1         16   12   39    4      0.235    0.750  0.358      12.0      21.0
-Table2         16   10   86    6      0.104    0.625  0.179       9.0      18.3
-Table3         16   11   64    5      0.147    0.688  0.242       9.6      17.6
-Table4         15   12   81    3      0.129    0.800  0.222       8.4      19.1
+Table2         16   10   84    6      0.106    0.625  0.182       9.0      18.3
+Table3         16   11   63    5      0.149    0.688  0.244       9.6      17.6
+Table4         15   12   80    3      0.130    0.800  0.224       8.4      19.1
 Table5         14   12   73    2      0.141    0.857  0.242      12.1      21.1
-Table6         13    6   51    7      0.105    0.462  0.171      10.1      20.9
-All            90   63  394   27      0.138    0.700  0.230      10.3      21.1
+Table6         13    6   48    7      0.111    0.462  0.179      10.1      20.9
+All            90   63  387   27      0.140    0.700  0.233      10.3      21.1
 
 Comparison of the location methods (Table1 to Table6):
 Method      Balls   TP   FP   FN  Precision   Recall     F1   MeanErr    MaxErr
@@ -161,7 +161,7 @@ Back proj      90   12   21   78      0.364    0.133  0.195      12.9      19.4
 Background     90   39   43   51      0.476    0.433  0.453       7.0      20.7
 Hough          90   82    7    8      0.921    0.911  0.916       4.9      17.1
 k-means        90   15   18   75      0.455    0.167  0.244       7.1      19.8
-Watershed      90   63  394   27      0.138    0.700  0.230      10.3      21.1
+Watershed      90   63  387   27      0.140    0.700  0.233      10.3      21.1
 
 Recognition: rejecting the circles unlike every reference ball
 Reference ball radius: 21.8 pixels
